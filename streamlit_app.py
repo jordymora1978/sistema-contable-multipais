@@ -1152,3 +1152,29 @@ st.markdown("""
     <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
 </div>
 """, unsafe_allow_html=True)
+
+def get_trm_rates():
+    try:
+        supabase = init_supabase()
+        if supabase:
+            try:
+                result = supabase.table('trm_rates').select('*').order('id', desc=True).execute()
+            except Exception:
+                result = supabase.table('trm_rates').select('*').limit(10).execute()
+                
+            if result.data:
+                df_trm = pd.DataFrame(result.data)
+                if 'id' in df_trm.columns:
+                    df_trm['id'] = pd.to_numeric(df_trm['id'], errors='coerce')
+                    df_trm = df_trm.dropna(subset=['id'])
+                    df_trm = df_trm.sort_values(by=['currency', 'id'], ascending=[True, False])
+                
+                df_trm = df_trm.drop_duplicates(subset=['currency'], keep='first')
+                return {row['currency']: row['rate'] for _, row in df_trm.iterrows()}
+        
+        return {'COP': 4000.0, 'PEN': 3.8, 'CLP': 900.0}
+    except Exception as e:
+        st.error(f"Error obteniendo TRM: {str(e)}")
+        return {'COP': 4000.0, 'PEN': 3.8, 'CLP': 900.0}
+
+trm_data = get_trm_rates()
