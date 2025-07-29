@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client, Client
 import time
+import re
 
 # ============================
 # CONFIGURACIÓN INICIAL
@@ -89,12 +90,16 @@ st.markdown("""
 def init_supabase():
     """Inicializa conexión con Supabase"""
     try:
-        url = "https://qzexuqkedukcwcyhrpza.supabase.co"
-        key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0"
+        # Intenta cargar desde st.secrets.
+        # Si estas líneas causan un KeyError, significa que st.secrets no está configurado.
+        # En ese caso, se usarán las claves directamente codificadas (menos seguro para producción).
+        url = st.secrets.get("supabase", {}).get("url", "https://qzexuqkedukcwcyhrpza.supabase.co")
+        key = st.secrets.get("supabase", {}).get("key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0")
+        
         supabase: Client = create_client(url, key)
         return supabase
     except Exception as e:
-        st.error(f"Error conectando a Supabase: {str(e)}")
+        st.error(f"Error conectando a Supabase: {str(e)}. Por favor, verifica tus credenciales y configuración.")
         return None
 
 def test_connection():
@@ -102,17 +107,22 @@ def test_connection():
     try:
         supabase = init_supabase()
         if supabase:
-            result = supabase.table('store_config').select('count').execute()
+            # Intenta una consulta simple a una tabla que se espera que exista, como 'store_config'
+            # O incluso una tabla dummy para solo probar la conexión.
+            # Puedes ajustar 'store_config' a una tabla que sepas que existe.
+            result = supabase.table('trm_rates').select('count').execute() # O cualquier otra tabla pequeña
             return True, "✅ Conectado a Supabase"
         return False, "❌ No se pudo inicializar Supabase"
     except Exception as e:
-        return False, f"❌ Error: {str(e)}"
+        return False, f"❌ Error de conexión: {str(e)}"
 
+@st.cache_data(ttl=3600) # Cache por 1 hora
 def get_store_config():
     """Obtiene configuración de tiendas desde Supabase"""
     try:
         supabase = init_supabase()
         if supabase:
+            # Asegúrate que 'store_config' es el nombre correcto de tu tabla en Supabase
             result = supabase.table('store_config').select('*').eq('activa', True).execute()
             if result.data:
                 return {row['account_name']: {
@@ -120,47 +130,87 @@ def get_store_config():
                     'pais': row['pais'],
                     'tipo_calculo': row['tipo_calculo']
                 } for row in result.data}
-        return {}
+        return {} # Retorna un diccionario vacío si no hay configuración o hay error
     except Exception as e:
-        st.error(f"Error obteniendo configuración: {str(e)}")
-        return {}
+        st.error(f"Error obteniendo configuración de tiendas desde Supabase: {str(e)}")
+        # Retorna una configuración de fallback para no romper la app si Supabase falla
+        return {
+            '1-TODOENCARGO-CO': {'prefijo': 'TDC', 'pais': 'Colombia', 'tipo_calculo': 'A'},
+            '2-MEGATIENDA SPA': {'prefijo': 'MEGA', 'pais': 'Chile', 'tipo_calculo': 'B'},
+            '3-VEENDELO': {'prefijo': 'VEEN', 'pais': 'Colombia', 'tipo_calculo': 'B'},
+            '4-MEGA TIENDAS PERUANAS': {'prefijo': 'MGA-PE', 'pais': 'Perú', 'tipo_calculo': 'A'},
+            '5-DETODOPARATODOS': {'prefijo': 'DTPT', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+            '6-COMPRAFACIL': {'prefijo': 'CFA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+            '7-COMPRA-YA': {'prefijo': 'CPYA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+            '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Colombia', 'tipo_calculo': 'D'}
+        }
 
+
+@st.cache_data(ttl=600) # Cache por 10 minutos
 def get_trm_rates():
     """Obtiene las últimas tasas TRM"""
     try:
         supabase = init_supabase()
         if supabase:
-            result = supabase.table('trm_rates').select('*').order('date_updated', desc=True).execute()
+            # Intenta ordenar por 'created_at'. Si no existe o da error, usa 'id'.
+            try:
+                result = supabase.table('trm_rates').select('*').order('created_at', desc=True).execute()
+            except Exception as e:
+                # Fallback si 'created_at' no existe o la consulta falla
+                st.warning(f"⚠️ No se pudo ordenar por 'created_at': {e}. Intentando ordenar por 'id'. Asegúrate de que 'created_at' sea una columna de tipo timestamp en tu tabla 'trm_rates' de Supabase con DEFAULT now().")
+                result = supabase.table('trm_rates').select('*').order('id', desc=True).execute()
+                
             if result.data:
-                trm_dict = {}
-                seen_currencies = set()
-                for row in result.data:
-                    if row['currency'] not in seen_currencies:
-                        trm_dict[row['currency']] = row['rate']
-                        seen_currencies.add(row['currency'])
-                return trm_dict
+                df_trm = pd.DataFrame(result.data)
+                # Convertir a datetime si las columnas existen
+                for col_date in ['date_updated', 'created_at']:
+                    if col_date in df_trm.columns:
+                        df_trm[col_date] = pd.to_datetime(df_trm[col_date], errors='coerce', infer_datetime_format=True)
+                
+                # Asegurarse de que 'id' es numérico
+                if 'id' in df_trm.columns:
+                    df_trm['id'] = pd.to_numeric(df_trm['id'], errors='coerce')
+                    df_trm = df_trm.dropna(subset=['id'])
+
+                # Ordenar por moneda y luego por la columna de fecha más fiable para obtener la última TRM por moneda
+                if 'created_at' in df_trm.columns and not df_trm['created_at'].isnull().all():
+                    df_trm = df_trm.sort_values(by=['currency', 'created_at'], ascending=[True, False])
+                else:
+                    df_trm = df_trm.sort_values(by=['currency', 'id'], ascending=[True, False])
+                
+                df_trm = df_trm.drop_duplicates(subset=['currency'], keep='first')
+                return {row['currency']: row['rate'] for _, row in df_trm.iterrows()}
+        # Fallback de TRM si Supabase no devuelve datos
         return {'COP': 4000.0, 'PEN': 3.8, 'CLP': 900.0}
     except Exception as e:
-        st.error(f"Error obteniendo TRM: {str(e)}")
+        st.error(f"Error obteniendo TRM: {str(e)}. Usando valores por defecto.")
         return {'COP': 4000.0, 'PEN': 3.8, 'CLP': 900.0}
+
 
 def save_trm_rates(trm_data):
     """Guarda tasas TRM en Supabase"""
     try:
         supabase = init_supabase()
         if supabase:
+            records_to_insert = []
             for currency, rate in trm_data.items():
                 if currency != 'last_update':
-                    data = {
+                    records_to_insert.append({
                         'currency': currency,
                         'rate': float(rate),
-                        'updated_by': 'streamlit_app'
-                    }
-                    supabase.table('trm_rates').insert(data).execute()
-            return True, "TRM guardado exitosamente"
-        return False, "No se pudo conectar a Supabase"
+                        'updated_by': 'streamlit_app',
+                        'date_updated': datetime.now().isoformat(), # Asegurarse de que esta columna exista
+                        'created_at': datetime.now().isoformat() # Asegurarse de que esta columna exista y sea timestamp con default now() en DB
+                    })
+            if records_to_insert:
+                # Supabase inserta automáticamente 'created_at' si la columna está configurada con DEFAULT now()
+                # y no se pasa en el insert. Aquí la estamos pasando explícitamente.
+                result = supabase.table('trm_rates').insert(records_to_insert).execute()
+                return True, "TRM guardado exitosamente"
+            return False, "No hay datos TRM para guardar"
+        return False, "No se pudo conectar a Supabase para guardar TRM"
     except Exception as e:
-        return False, f"Error: {str(e)}"
+        return False, f"Error al guardar TRM en Supabase: {str(e)}"
 
 def save_orders_to_supabase(df):
     """Guarda órdenes procesadas en Supabase"""
@@ -169,6 +219,7 @@ def save_orders_to_supabase(df):
         if not supabase:
             return False, "No hay conexión a Supabase"
         
+        # Prepara los datos para la inserción, limpiando y ajustando tipos
         orders_data = []
         for _, row in df.iterrows():
             order_dict = {
@@ -179,7 +230,7 @@ def save_orders_to_supabase(df):
                 'pais': str(row.get('pais', '')),
                 'tipo_calculo': str(row.get('tipo_calculo', '')),
                 'moneda': str(row.get('moneda', '')),
-                'date_created': row.get('date_created'),
+                'date_created': row.get('date_created').isoformat() if pd.notna(row.get('date_created')) and isinstance(row.get('date_created'), datetime) else None,
                 'quantity': int(row.get('quantity', 0)),
                 'logistic_type': str(row.get('logistic_type', '')),
                 'order_status_meli': str(row.get('order_status_meli', '')),
@@ -200,32 +251,49 @@ def save_orders_to_supabase(df):
                 'utilidad_socio': float(row.get('Utilidad Socio', 0))
             }
             orders_data.append(order_dict)
-        
+            
         # Insertar en lotes
-        batch_size = 100
+        batch_size = 100 # Puedes ajustar este tamaño si tienes problemas de rendimiento o límites de Supabase
         total_inserted = 0
         
         for i in range(0, len(orders_data), batch_size):
             batch = orders_data[i:i+batch_size]
+            # Usamos upsert con on_conflict='order_id' para actualizar si ya existe, insertar si no.
+            # Asegúrate que 'order_id' es la PK en tu tabla 'orders' en Supabase.
             result = supabase.table('orders').upsert(batch, on_conflict='order_id').execute()
             total_inserted += len(batch)
+            
+        return True, f"{total_inserted} órdenes guardadas/actualizadas"
         
-        return True, f"{total_inserted} órdenes guardadas"
-    
     except Exception as e:
-        return False, f"Error: {str(e)}"
+        return False, f"Error al guardar órdenes en Supabase: {str(e)}"
 
+@st.cache_data(ttl=60) # Cache por 1 minuto
 def get_orders_from_supabase(limit=1000):
     """Obtiene órdenes desde Supabase"""
     try:
         supabase = init_supabase()
         if supabase:
-            result = supabase.table('orders').select('*').order('created_at', desc=True).limit(limit).execute()
+            try:
+                # Intentar ordenar por 'created_at' si existe en la tabla 'orders'
+                result = supabase.table('orders').select('*').order('created_at', desc=True).limit(limit).execute()
+            except Exception as e:
+                # Fallback a 'order_id' si 'created_at' no existe o falla
+                st.warning(f"⚠️ No se pudo ordenar por 'created_at' en tabla 'orders': {e}. Intentando ordenar por 'order_id'.")
+                result = supabase.table('orders').select('*').order('order_id', desc=True).limit(limit).execute()
+            
             if result.data:
-                return True, pd.DataFrame(result.data)
-        return False, "No hay datos"
+                df = pd.DataFrame(result.data)
+                # Convertir columnas de fecha si existen
+                for col_date in ['date_created', 'created_at']:
+                    if col_date in df.columns:
+                        df[col_date] = pd.to_datetime(df[col_date], errors='coerce', infer_datetime_format=True)
+                return True, df
+        return False, "No hay datos en la tabla 'orders' de Supabase."
     except Exception as e:
-        return False, f"Error: {str(e)}"
+        st.error(f"Error obteniendo órdenes desde Supabase: {str(e)}")
+        return False, pd.DataFrame() # Retorna DataFrame vacío en caso de error
+
 
 # ============================
 # FUNCIONES DE NEGOCIO
@@ -265,10 +333,16 @@ def obtener_gss_logistica(peso_kg):
         if desde <= peso_kg <= hasta:
             return gss_value
     
-    return 373.72
+    return ANEXO_A[-1][2] # Último valor si excede el rango
+
 
 def calcular_utilidades(df, store_config, trm_data):
-    """Calcula utilidades según tipo de tienda"""
+    """Calcula utilidades según tipo de tienda.
+       Asume que df es el DataFrame de Drapify pre-procesado."""
+    
+    # Asegurar que las columnas de referencia sean strings
+    df['Serial#'] = df.get('Serial#', pd.Series()).astype(str)
+    df['order_id'] = df.get('order_id', pd.Series()).astype(str)
     
     # Calcular columna Asignacion
     df['Asignacion'] = df.apply(
@@ -295,75 +369,37 @@ def calcular_utilidades(df, store_config, trm_data):
         axis=1
     )
     
-    # Inicializar columnas
+    # Inicializar columnas que pueden venir de merges o cálculos específicos
     for col in ['Aditional', 'Bodegal', 'Socio_cuenta', 'Impuesto por facturacion', 
-               'Gss Logistica', 'Impuesto Gss', 'Utilidad Gss', 'Utilidad Socio',
-               'Total_Anican', 'Costo cxp']:
-        df[col] = 0
-    
+                'Gss Logistica', 'Impuesto Gss', 'Utilidad Gss', 'Utilidad Socio',
+                'Total_Anican', 'Costo cxp', 'Amt_Due_CXP', 'Arancel_CXP', 'IVA_CXP', 'Peso_kg']:
+        if col not in df.columns: # Solo inicializar si no existen
+            df[col] = 0.0
+
     df['Costo Amazon'] = df['Declare Value'].fillna(0) * df['quantity'].fillna(1)
-    
-    # Calcular utilidades por tipo
-    for idx, row in df.iterrows():
-        tipo = row['tipo_calculo']
-        
-        if tipo == 'A':  # TODOENCARGO-CO, MEGA TIENDAS PERUANAS
-            df.at[idx, 'Utilidad Gss'] = (
-                row['MELI USD'] - row['Costo Amazon'] - 
-                row.get('Total_Anican', 0) - row.get('Aditional', 0)
-            )
-        
-        elif tipo == 'B':  # MEGATIENDA SPA, VEENDELO
-            df.at[idx, 'Bodegal'] = 3.5 if str(row.get('logistic_type', '')).lower() == 'xd_drop_off' else 0
-            df.at[idx, 'Socio_cuenta'] = 0 if str(row.get('order_status_meli', '')).lower() == 'refunded' else 1
-            df.at[idx, 'Utilidad Gss'] = (
-                row['MELI USD'] - row.get('Costo cxp', 0) - 
-                row['Costo Amazon'] - row.get('Bodegal', 0) - row.get('Socio_cuenta', 0)
-            )
-        
-        elif tipo == 'C':  # DETODOPARATODOS, COMPRAFACIL, COMPRA-YA
-            df.at[idx, 'Impuesto por facturacion'] = (
-                1 if str(row.get('order_status_meli', '')).lower() in ['approved', 'in mediation'] else 0
-            )
-            
-            utilidad_base = (
-                row['MELI USD'] - row['Costo Amazon'] - 
-                row.get('Total_Anican', 0) - row.get('Aditional', 0) - 
-                row.get('Impuesto por facturacion', 0)
-            )
-            
-            if utilidad_base > 7.5:
-                df.at[idx, 'Utilidad Socio'] = 7.5
-                df.at[idx, 'Utilidad Gss'] = utilidad_base - 7.5
-            else:
-                df.at[idx, 'Utilidad Socio'] = utilidad_base
-                df.at[idx, 'Utilidad Gss'] = 0
-        
-        elif tipo == 'D':  # FABORCARGO
-            peso_libras = (row.get('logistic_weight_lbs', 0) * row.get('quantity', 1)) if pd.notna(row.get('logistic_weight_lbs')) else 0
-            peso_kg = peso_libras * 0.453592
-            df.at[idx, 'Gss Logistica'] = obtener_gss_logistica(peso_kg)
-            df.at[idx, 'Bodegal'] = 3.5 if str(row.get('logistic_type', '')).lower() == 'xd_drop_off' else 0
-            
-            df.at[idx, 'Utilidad Gss'] = (
-                row.get('Gss Logistica', 0) + row.get('Impuesto Gss', 0) - row.get('Costo cxp', 0)
-            )
-    
+
+    # El resto de los cálculos específicos por tipo se harán en el loop principal
+    # después de que todos los archivos (Anican, Aditionals, CXP) hayan sido fusionados.
+    # Esta función `calcular_utilidades` solo prepara las columnas comunes.
     return df
 
 # ============================
 # INICIALIZAR SESSION STATE
 # ============================
 
+# Inicializar `processed_data` una sola vez
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 
+# Inicializar TRM y Store Config desde Supabase
+# Se cargan una vez y se actualizan si el usuario las cambia
 if 'trm_data' not in st.session_state:
     st.session_state.trm_data = get_trm_rates()
     st.session_state.trm_data['last_update'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 if 'store_config' not in st.session_state:
     st.session_state.store_config = get_store_config()
+
 
 # ============================
 # INTERFAZ PRINCIPAL
@@ -448,7 +484,7 @@ if page == "🏠 Inicio":
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.metric("Total Órdenes", len(df))
+                st.metric("📦 Total Órdenes", len(df))
             with col2:
                 total_utilidad = df['utilidad_gss'].sum() + df['utilidad_socio'].sum()
                 st.metric("Utilidad Total", f"${total_utilidad:,.2f}")
@@ -465,15 +501,16 @@ if page == "🏠 Inicio":
                 <p>No hay datos en Supabase aún. Ve a <strong>"Procesar Archivos"</strong> para cargar tu primera información.</p>
             </div>
             """, unsafe_allow_html=True)
-    
+        
     except Exception as e:
         st.warning(f"⚠️ No se pudo cargar resumen: {str(e)}")
+
 
 elif page == "📊 Dashboard en Tiempo Real":
     st.header("📊 Dashboard en Tiempo Real")
     
     try:
-        success, df = get_orders_from_supabase(500)
+        success, df = get_orders_from_supabase(500) # Se obtienen 500 órdenes para el dashboard
         
         if success and len(df) > 0:
             # Métricas principales
@@ -509,7 +546,9 @@ elif page == "📊 Dashboard en Tiempo Real":
                     x='pais', 
                     y=['utilidad_gss', 'utilidad_socio'],
                     title='Utilidades por País (USD)',
-                    height=400
+                    height=400,
+                    labels={'value': 'Utilidad (USD)', 'variable': 'Tipo de Utilidad'},
+                    color_discrete_map={'utilidad_gss': '#007bff', 'utilidad_socio': '#28a745'}
                 )
                 st.plotly_chart(fig_pais, use_container_width=True)
             
@@ -520,7 +559,7 @@ elif page == "📊 Dashboard en Tiempo Real":
                     'utilidad_socio': 'sum'
                 }).reset_index()
                 tienda_data['total'] = tienda_data['utilidad_gss'] + tienda_data['utilidad_socio']
-                tienda_data = tienda_data.sort_values('total', ascending=True).tail(10)
+                tienda_data = tienda_data.sort_values('total', ascending=True).tail(10) # Top 10
                 
                 fig_tienda = px.bar(
                     tienda_data, 
@@ -528,7 +567,9 @@ elif page == "📊 Dashboard en Tiempo Real":
                     y='account_name',
                     orientation='h',
                     title='Top 10 Tiendas por Utilidad Total',
-                    height=500
+                    height=500,
+                    labels={'total': 'Utilidad Total (USD)', 'account_name': 'Nombre de Tienda'},
+                    color_discrete_sequence=px.colors.sequential.Viridis
                 )
                 st.plotly_chart(fig_tienda, use_container_width=True)
             
@@ -540,83 +581,306 @@ elif page == "📊 Dashboard en Tiempo Real":
             )
         
         else:
-            st.warning("No hay datos disponibles en Supabase")
+            st.warning("No hay datos disponibles en Supabase para mostrar en el Dashboard. Por favor, procesa algunos archivos primero.")
     
     except Exception as e:
         st.error(f"Error cargando dashboard: {str(e)}")
 
+
 elif page == "📁 Procesar Archivos":
-    st.header("📁 Procesar Archivos")
+    st.header("📁 Cargar y Procesar Archivos")
     
     st.markdown("""
     <div class="info-box">
         <h4>🔄 Proceso de Carga</h4>
-        <p>Sube tu archivo DRAPIFY y el sistema calculará automáticamente las utilidades según las fórmulas de negocio.</p>
+        <p>Sube los archivos necesarios (DRAPIFY, Anican Logistics, Anican Aditionals, Chile Express CXP) para calcular las utilidades según las fórmulas de negocio.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Formulario de carga
-    drapify_file = st.file_uploader(
-        "📄 Archivo DRAPIFY (Orders_XXXXXXXX)",
-        type=['xlsx', 'xls'],
-        help="Archivo principal con órdenes de MercadoLibre"
-    )
+    # Crear columnas para organizar las cargas
+    col_drapify, col_anican_cxp = st.columns(2)
+
+    with col_drapify:
+        st.markdown("### 📊 Archivo Principal: DRAPIFY")
+        drapify_file = st.file_uploader(
+            "📄 Cargar DRAPIFY (Orders_XXXXXXXX)",
+            type=['xlsx', 'xls'],
+            key="drapify_uploader", # Clave única para el uploader
+            help="Archivo principal con todas las órdenes de MercadoLibre."
+        )
+
+    with col_anican_cxp:
+        st.markdown("### 🚚 Archivos Logísticos y Adicionales")
+        anican_file = st.file_uploader(
+            "🚚 Cargar Anican Logistics",
+            type=['xlsx', 'xls'],
+            key="anican_uploader",
+            help="Archivo con costos logísticos de Anican."
+        )
+        aditionals_file = st.file_uploader(
+            "➕ Cargar Anican Aditionals",
+            type=['xlsx', 'xls'],
+            key="aditionals_uploader",
+            help="Archivo con costos adicionales de Anican."
+        )
+        cxp_file = st.file_uploader(
+            "🇨🇱 Cargar Chile Express (CXP)",
+            type=['xlsx', 'xls'],
+            key="cxp_uploader",
+            help="Archivo de Chile Express con costos logísticos y de aduana (Arancel, IVA)."
+        )
+
     
     if st.button("🚀 Procesar y Guardar en Supabase", type="primary"):
         if drapify_file:
             try:
-                with st.spinner("Procesando archivo..."):
-                    # Leer archivo
+                with st.spinner("Procesando archivos... Esto puede tardar unos segundos."):
+                    # 1. PROCESAR ARCHIVO DRAPIFY
                     df_drapify = pd.read_excel(drapify_file)
+
+                    # Verificar columnas requeridas en DRAPIFY
+                    columnas_requeridas_drapify = [
+                        'System#', 'Serial#', 'order_id', 'account_name',
+                        'date_created', 'quantity', 'logistic_type',
+                        'order_status_meli', 'ETIQUETA_ENVIO', 'Declare Value',
+                        'net_real_amount', 'logistic_weight_lbs',
+                        'refunded_date'
+                    ]
+
+                    columnas_faltantes_drapify = [
+                        col for col in columnas_requeridas_drapify
+                        if col not in df_drapify.columns
+                    ]
+
+                    if columnas_faltantes_drapify:
+                        st.error(
+                            f"❌ Faltan columnas en el archivo DRAPIFY: {', '.join(columnas_faltantes_drapify)}"
+                        )
+                        st.stop() 
                     
-                    # Verificar columnas básicas
-                    columnas_requeridas = ['order_id', 'account_name', 'quantity', 'net_real_amount', 'Declare Value']
-                    
-                    columnas_faltantes = [col for col in columnas_requeridas if col not in df_drapify.columns]
-                    
-                    if columnas_faltantes:
-                        st.error(f"❌ Faltan columnas: {', '.join(columnas_faltantes)}")
-                        st.stop()
-                    
-                    # Procesar datos
-                    df_procesado = calcular_utilidades(df_drapify, st.session_state.store_config, st.session_state.trm_data)
-                    
-                    # Guardar en Supabase
-                    success, message = save_orders_to_supabase(df_procesado)
-                    
-                    if success:
-                        st.success(f"✅ {message}")
-                        
-                        # Mostrar resumen
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("📦 Órdenes Procesadas", len(df_procesado))
-                        with col2:
-                            st.metric("💰 Utilidad GSS", f"${df_procesado['Utilidad Gss'].sum():.2f}")
-                        with col3:
-                            st.metric("🤝 Utilidad Socio", f"${df_procesado['Utilidad Socio'].sum():.2f}")
-                        with col4:
-                            st.metric("🏪 Tiendas", df_procesado['account_name'].nunique())
-                        
-                        # Guardar en session state
-                        st.session_state.processed_data = df_procesado
-                        
-                        st.markdown("### 👀 Vista Previa")
-                        st.dataframe(df_procesado[['account_name', 'order_id', 'pais', 'MELI USD', 'Utilidad Gss', 'Utilidad Socio']].head(10))
-                    
+                    # Inicializar el DataFrame base con las columnas de Drapify y las comunes calculadas
+                    df_processed = calcular_utilidades(df_drapify.copy(), st.session_state.store_config, st.session_state.trm_data)
+
+                    # 2. PROCESAR ARCHIVO ANICAN LOGISTICS (si existe)
+                    if anican_file:
+                        try:
+                            df_anican = pd.read_excel(anican_file)
+                            required_anican_cols = ['Reference', 'Total']
+                            
+                            if all(col in df_anican.columns for col in required_anican_cols):
+                                df_anican['Reference'] = df_anican['Reference'].astype(str)
+                                df_processed = df_processed.merge(
+                                    df_anican[['Reference', 'Total']].rename(
+                                        columns={'Reference': 'order_id', 'Total': 'Total_Anican_Merge'}),
+                                    on='order_id',
+                                    how='left'
+                                )
+                                df_processed['Total_Anican'] = df_processed['Total_Anican_Merge'].fillna(0)
+                                if 'Total_Anican_Merge' in df_processed.columns:
+                                    df_processed = df_processed.drop(columns=['Total_Anican_Merge'])
+                                st.success(f"✅ Anican Logistics procesado: {df_processed['Total_Anican'].gt(0).sum()} coincidencias.")
+                            else:
+                                st.warning("⚠️ Archivo Anican Logistics no tiene las columnas esperadas ('Reference', 'Total').")
+                        except Exception as e:
+                            st.error(f"❌ Error procesando Anican Logistics: {str(e)}")
                     else:
-                        st.error(f"❌ Error: {message}")
+                        st.info("ℹ️ Archivo Anican Logistics no cargado. Se omitirá su procesamiento.")
+
+                    # 3. PROCESAR ARCHIVO ANICAN ADITIONALS (si existe)
+                    if aditionals_file:
+                        try:
+                            df_aditionals = pd.read_excel(aditionals_file)
+                            required_aditionals_cols = ['Order Id', 'Quantity', 'UnitPrice']
+                            
+                            if all(col in df_aditionals.columns for col in required_aditionals_cols):
+                                df_aditionals['Aditional_calc_temp'] = df_aditionals['Quantity'].fillna(0) * df_aditionals['UnitPrice'].fillna(0)
+                                aditionals_grouped = df_aditionals.groupby('Order Id')['Aditional_calc_temp'].sum().reset_index()
+                                
+                                # Renombrar para el merge
+                                aditionals_grouped = aditionals_grouped.rename(
+                                    columns={'Order Id': 'order_id', 'Aditional_calc_temp': 'Aditional_Merge'})
+                                aditionals_grouped['order_id'] = aditionals_grouped['order_id'].astype(str)
+
+                                df_processed = df_processed.merge(
+                                    aditionals_grouped[['order_id', 'Aditional_Merge']],
+                                    on='order_id',
+                                    how='left'
+                                )
+                                df_processed['Aditional'] = df_processed['Aditional_Merge'].fillna(0)
+                                if 'Aditional_Merge' in df_processed.columns:
+                                    df_processed = df_processed.drop(columns=['Aditional_Merge'])
+                                st.success(f"✅ Anican Aditionals procesado: {df_processed['Aditional'].gt(0).sum()} coincidencias.")
+                            else:
+                                st.warning("⚠️ Archivo Anican Aditionals no tiene las columnas esperadas ('Order Id', 'Quantity', 'UnitPrice').")
+                        except Exception as e:
+                            st.error(f"❌ Error procesando Anican Aditionals: {str(e)}")
+                    else:
+                        st.info("ℹ️ Archivo Anican Aditionals no cargado. Se omitirá su procesamiento.")
+
+                    # 4. PROCESAR ARCHIVO CXP (si existe)
+                    if cxp_file:
+                        try:
+                            st.info("🔧 Iniciando procesamiento de Chile Express (CXP)...")
+                            excel_file_cxp = pd.ExcelFile(cxp_file)
+                            df_cxp = None
+                            
+                            for sheet_name in excel_file_cxp.sheet_names:
+                                for header_row in range(5): # Probar encabezados en las primeras 5 filas (0-4)
+                                    try:
+                                        df_test_cxp = pd.read_excel(cxp_file, sheet_name=sheet_name, header=header_row)
+                                        df_test_cxp.columns = [str(col).strip() for col in df_test_cxp.columns] # Limpiar nombres de columna
+                                        
+                                        # Buscar columnas por patrones flexibles
+                                        ref_col = next((col for col in df_test_cxp.columns if re.search(r'Ref\s*#', col, re.IGNORECASE)), None)
+                                        amt_col = next((col for col in df_test_cxp.columns if re.search(r'Amt\.\s*Due', col, re.IGNORECASE)), None)
+                                        arancel_col = next((col for col in df_test_cxp.columns if re.search(r'Arancel', col, re.IGNORECASE)), None)
+                                        iva_col = next((col for col in df_test_cxp.columns if re.search(r'IVA', col, re.IGNORECASE)), None)
+
+                                        if ref_col and amt_col:
+                                            df_cxp = df_test_cxp[[ref_col, amt_col]].copy()
+                                            df_cxp = df_cxp.rename(columns={ref_col: 'Asignacion_cxp', amt_col: 'Amt_Due_CXP'})
+                                            
+                                            if arancel_col: df_cxp['Arancel_CXP_Merge'] = pd.to_numeric(df_test_cxp[arancel_col], errors='coerce').fillna(0)
+                                            if iva_col: df_cxp['IVA_CXP_Merge'] = pd.to_numeric(df_test_cxp[iva_col], errors='coerce').fillna(0)
+                                            
+                                            st.info(f"✅ CXP: Encabezado detectado en hoja '{sheet_name}', fila {header_row}. Columnas: {list(df_cxp.columns)}")
+                                            break # Salir de loop de headers si encontramos
+                                    except Exception as e:
+                                        # No mostrar error para cada intento, es normal que fallen varios.
+                                        pass 
+                                if df_cxp is not None:
+                                    break # Salir de loop de hojas si encontramos
+                            
+                            if df_cxp is not None:
+                                df_cxp['Asignacion_cxp'] = df_cxp['Asignacion_cxp'].astype(str).str.strip()
+                                df_cxp['Amt_Due_CXP'] = pd.to_numeric(df_cxp['Amt_Due_CXP'], errors='coerce').fillna(0)
+                                
+                                # Unir con el DataFrame principal
+                                df_processed = df_processed.merge(
+                                    df_cxp[['Asignacion_cxp', 'Amt_Due_CXP', 'Arancel_CXP_Merge', 'IVA_CXP_Merge']].rename(
+                                        columns={'Arancel_CXP_Merge': 'Arancel_CXP', 'IVA_CXP_Merge': 'IVA_CXP'}),
+                                    left_on='Asignacion',
+                                    right_on='Asignacion_cxp',
+                                    how='left'
+                                )
+                                df_processed['Amt_Due_CXP'] = df_processed['Amt_Due_CXP'].fillna(0)
+                                df_processed['Arancel_CXP'] = df_processed['Arancel_CXP'].fillna(0)
+                                df_processed['IVA_CXP'] = df_processed['IVA_CXP'].fillna(0)
+                                df_processed['Costo cxp'] = df_processed['Amt_Due_CXP'] # Según la fórmula
+                                df_processed['Impuesto Gss'] = df_processed['Arancel_CXP'] + df_processed['IVA_CXP'] # Según la fórmula
+
+                                # Limpiar columnas temporales del merge
+                                if 'Asignacion_cxp' in df_processed.columns:
+                                    df_processed = df_processed.drop(columns=['Asignacion_cxp'])
+
+                                st.success(f"✅ Chile Express (CXP) procesado exitosamente. {df_processed['Amt_Due_CXP'].gt(0).sum()} coincidencias.")
+                            else:
+                                st.warning("⚠️ No se pudo encontrar las columnas 'Ref #' y 'Amt. Due' en el archivo CXP.")
+                        except Exception as e:
+                            st.error(f"❌ Error procesando Chile Express (CXP): {str(e)}")
+                    else:
+                        st.info("ℹ️ Archivo Chile Express (CXP) no cargado. Se omitirá su procesamiento.")
+
+                    # --- RE-CALCULAR CAMPOS ESPECÍFICOS Y UTILIDADES DESPUÉS DE MERGES ---
+                    # Ahora que todos los datos están fusionados, aplicar los cálculos finales
+                    df_processed['Bodegal'] = df_processed['logistic_type'].apply(lambda x: 3.5 if str(x).lower() == 'xd_drop_off' else 0)
+                    df_processed['Socio_cuenta'] = df_processed['order_status_meli'].apply(lambda x: 0 if str(x).lower() == 'refunded' else 1)
+                    df_processed['Impuesto por facturacion'] = df_processed['order_status_meli'].apply(lambda x: 1 if str(x).lower() in ['approved', 'in mediation'] else 0)
+                    df_processed['Peso_kg'] = df_processed.apply(lambda row: (row['logistic_weight_lbs'].fillna(0) * row['quantity'].fillna(1)) * 0.453592, axis=1)
+                    df_processed['Gss Logistica'] = df_processed['Peso_kg'].apply(obtener_gss_logistica)
+
+                    # Final calcular Utilidad Gss y Utilidad Socio (separamos la lógica por tipo de cálculo)
+                    def apply_final_profit_calculation(row):
+                        tipo = row['tipo_calculo']
+                        meli_usd = row['MELI USD']
+                        costo_amazon = row['Costo Amazon']
+                        total_anican = row['Total_Anican']
+                        aditional = row['Aditional']
+                        costo_cxp = row['Costo cxp']
+                        bodegal = row['Bodegal']
+                        socio_cuenta = row['Socio_cuenta']
+                        impuesto_facturacion = row['Impuesto por facturacion']
+                        gss_logistica = row['Gss Logistica']
+                        impuesto_gss = row['Impuesto Gss']
+                        amt_due_cxp = row['Amt_Due_CXP'] # Equivalente a Costo cxp para D
+
+                        utilidad_gss_final = 0.0
+                        utilidad_socio_final = 0.0
+
+                        if tipo == 'A': # TODOENCARGO-CO, MEGA TIENDAS PERUANAS
+                            utilidad_gss_final = meli_usd - costo_amazon - total_anican - aditional
+                        elif tipo == 'B': # MEGATIENDA SPA, VEENDELO
+                            utilidad_gss_final = meli_usd - costo_cxp - costo_amazon - bodegal - socio_cuenta
+                        elif tipo == 'C': # DETODOPARATODOS, COMPRAFACIL, COMPRA-YA
+                            utilidad_base_c = meli_usd - costo_amazon - total_anican - aditional - impuesto_facturacion
+                            if utilidad_base_c > 7.5:
+                                utilidad_socio_final = 7.5
+                                utilidad_gss_final = utilidad_base_c - utilidad_socio_final
+                            else:
+                                utilidad_socio_final = utilidad_base_c
+                                utilidad_gss_final = 0
+                        elif tipo == 'D': # FABORCARGO
+                            utilidad_gss_final = gss_logistica + impuesto_gss - amt_due_cxp
+                        
+                        return pd.Series([utilidad_gss_final, utilidad_socio_final], index=['Utilidad Gss', 'Utilidad Socio'])
+
+                    df_processed[['Utilidad Gss', 'Utilidad Socio']] = df_processed.apply(apply_final_profit_calculation, axis=1)
+
+
+                    st.session_state.processed_data = df_processed
+                    st.success("✅ Archivos procesados y utilidades calculadas con éxito!")
+
+                    # Guardar en Supabase
+                    save_success, save_message = save_orders_to_supabase(df_processed)
+                    if save_success:
+                        st.success(f"💾 {save_message}")
+                    else:
+                        st.error(f"❌ Error al guardar en Supabase: {save_message}")
+                    
+                    # Limpiar cache para forzar la recarga del dashboard
+                    st.cache_data.clear()
+                    
+                    # Mostrar resumen de lo procesado
+                    st.markdown("### 📊 Resumen de Procesamiento")
+                    col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+                    with col_p1:
+                        st.metric("Total Órdenes", len(df_processed))
+                    with col_p2:
+                        st.metric("Utilidad GSS Calculada", f"${df_processed['Utilidad Gss'].sum():,.2f}")
+                    with col_p3:
+                        st.metric("Utilidad Socio Calculada", f"${df_processed['Utilidad Socio'].sum():,.2f}")
+                    with col_p4:
+                        st.metric("Tiendas Procesadas", df_processed['account_name'].nunique())
+                    
+                    st.markdown("### 👀 Vista Previa de Datos Procesados")
+                    st.dataframe(df_processed[['order_id', 'account_name', 'pais', 'MELI USD', 'Costo Amazon', 
+                                                'Total_Anican', 'Aditional', 'Costo cxp', 'Impuesto Gss',
+                                                'Gss Logistica', 'Utilidad Gss', 'Utilidad Socio']].head(10))
+
+                    # Opción para descargar el DataFrame procesado
+                    csv = df_processed.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="Descargar datos procesados (CSV)",
+                        data=csv,
+                        file_name=f"datos_contables_procesados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                    )
             
             except Exception as e:
-                st.error(f"❌ Error procesando archivo: {str(e)}")
-        
+                st.error(f"❌ Ocurrió un error general durante el procesamiento: {str(e)}")
+                st.exception(e)
         else:
-            st.warning("⚠️ Por favor, sube un archivo DRAPIFY")
+            st.warning("⚠️ Por favor, carga el archivo 'DRAPIFY (Orders_XXXXXXXX)' para iniciar el procesamiento.")
+
 
 elif page == "💱 Configurar TRM":
     st.header("💱 Configuración de Tasas de Cambio")
     
+    # Recargar TRM actual para mostrar siempre lo último antes de la edición
+    st.session_state.trm_data = get_trm_rates()
+
     with st.form("trm_form"):
+        st.markdown("### Tasas de Cambio Actuales (USD a Moneda Local)")
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -626,7 +890,8 @@ elif page == "💱 Configurar TRM":
                 value=float(st.session_state.trm_data.get('COP', 4000.0)),
                 step=50.0,
                 min_value=1000.0,
-                max_value=10000.0
+                max_value=10000.0,
+                format="%.2f"
             )
         
         with col2:
@@ -634,9 +899,10 @@ elif page == "💱 Configurar TRM":
             pen_trm = st.number_input(
                 "PEN por 1 USD",
                 value=float(st.session_state.trm_data.get('PEN', 3.8)),
-                step=0.1,
+                step=0.01, # Ajustado para precisión de PEN
                 min_value=1.0,
-                max_value=10.0
+                max_value=10.0,
+                format="%.3f" # Ajustado para precisión de PEN
             )
         
         with col3:
@@ -646,7 +912,8 @@ elif page == "💱 Configurar TRM":
                 value=float(st.session_state.trm_data.get('CLP', 900.0)),
                 step=10.0,
                 min_value=500.0,
-                max_value=1500.0
+                max_value=1500.0,
+                format="%.2f"
             )
         
         submitted = st.form_submit_button("💾 Actualizar TRM", type="primary")
@@ -657,22 +924,22 @@ elif page == "💱 Configurar TRM":
                 'COP': cop_trm,
                 'PEN': pen_trm,
                 'CLP': clp_trm,
-                'last_update': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             
-            st.session_state.trm_data.update(new_trm_data)
-            
-            # Guardar en Supabase
             success, message = save_trm_rates(new_trm_data)
             
             if success:
-                st.success("✅ Tasas TRM actualizadas exitosamente!")
-                st.rerun()
+                st.success("✅ Tasas TRM actualizadas exitosamente y guardadas en Supabase!")
+                # Forzar recarga del estado y UI para reflejar los cambios
+                st.session_state.trm_data = get_trm_rates() 
+                st.session_state.trm_data['last_update'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                st.rerun() # Recarga la página para que el sidebar también se actualice
             else:
-                st.error(f"❌ Error: {message}")
-        
+                st.error(f"❌ Error al guardar TRM en Supabase: {message}")
+            
         except Exception as e:
             st.error(f"❌ Error actualizando TRM: {str(e)}")
+
 
 elif page == "📋 Fórmulas de Negocio":
     st.header("📋 Fórmulas de Negocio por Tipo de Tienda")
