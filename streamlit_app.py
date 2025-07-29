@@ -273,7 +273,7 @@ def calcular_utilidades(df, store_config, trm_data):
     
     # Calcular columna Asignacion
     df['Asignacion'] = df.apply(
-        lambda row: calcular_asignacion(row['account_name'], row['Serial#'], store_config),
+        lambda row: calcular_asignacion(row['account_name'], row.get('Serial#', ''), store_config),
         axis=1
     )
     
@@ -315,8 +315,8 @@ def calcular_utilidades(df, store_config, trm_data):
             )
         
         elif tipo == 'B':  # MEGATIENDA SPA, VEENDELO
-            df.at[idx, 'Bodegal'] = 3.5 if str(row['logistic_type']).lower() == 'xd_drop_off' else 0
-            df.at[idx, 'Socio_cuenta'] = 0 if str(row['order_status_meli']).lower() == 'refunded' else 1
+            df.at[idx, 'Bodegal'] = 3.5 if str(row.get('logistic_type', '')).lower() == 'xd_drop_off' else 0
+            df.at[idx, 'Socio_cuenta'] = 0 if str(row.get('order_status_meli', '')).lower() == 'refunded' else 1
             df.at[idx, 'Utilidad Gss'] = (
                 row['MELI USD'] - row.get('Costo cxp', 0) - 
                 row['Costo Amazon'] - row.get('Bodegal', 0) - row.get('Socio_cuenta', 0)
@@ -324,7 +324,7 @@ def calcular_utilidades(df, store_config, trm_data):
         
         elif tipo == 'C':  # DETODOPARATODOS, COMPRAFACIL, COMPRA-YA
             df.at[idx, 'Impuesto por facturacion'] = (
-                1 if str(row['order_status_meli']).lower() in ['approved', 'in mediation'] else 0
+                1 if str(row.get('order_status_meli', '')).lower() in ['approved', 'in mediation'] else 0
             )
             
             utilidad_base = (
@@ -344,7 +344,7 @@ def calcular_utilidades(df, store_config, trm_data):
             peso_libras = (row.get('logistic_weight_lbs', 0) * row.get('quantity', 1)) if pd.notna(row.get('logistic_weight_lbs')) else 0
             peso_kg = peso_libras * 0.453592
             df.at[idx, 'Gss Logistica'] = obtener_gss_logistica(peso_kg)
-            df.at[idx, 'Bodegal'] = 3.5 if str(row['logistic_type']).lower() == 'xd_drop_off' else 0
+            df.at[idx, 'Bodegal'] = 3.5 if str(row.get('logistic_type', '')).lower() == 'xd_drop_off' else 0
             
             df.at[idx, 'Utilidad Gss'] = (
                 row.get('Gss Logistica', 0) + row.get('Impuesto Gss', 0) - row.get('Costo cxp', 0)
@@ -622,9 +622,6 @@ elif page == "💱 Configurar TRM":
         
         with col1:
             st.markdown("### 🇨🇴 Colombia")
-            cop_trm = st.number_input(
-                "COP por 1 USD",
-                value=float(st.session_state.trm_data.get('COP', 4
             cop_trm = st.number_input(
                 "COP por 1 USD",
                 value=float(st.session_state.trm_data.get('COP', 4000.0)),
