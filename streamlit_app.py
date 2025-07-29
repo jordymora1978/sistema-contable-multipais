@@ -38,3 +38,29 @@ def init_supabase():
         '7-COMPRA-YA': {'prefijo': 'CPYA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
         '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Chile', 'tipo_calculo': 'D'}
     }
+    def to_snake_case(name):
+    name = str(name)
+    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    return name.lower().replace(' ', '_').replace('.', '').replace('#', '').replace('-', '_')
+
+def calcular_asignacion(account_name, serial_number, store_config):
+    if pd.isna(account_name) or pd.isna(serial_number):
+        return None
+    
+    account_str = str(account_name).strip()
+    prefijo = store_config.get(account_str, {}).get('prefijo', '')
+    
+    if prefijo:
+        return f"{prefijo}{serial_number}"
+    return None
+
+store_config = {
+    '1-TODOENCARGO-CO': {'prefijo': 'TDC', 'pais': 'Colombia', 'tipo_calculo': 'A'},
+    '2-MEGATIENDA SPA': {'prefijo': 'MEGA', 'pais': 'Chile', 'tipo_calculo': 'B'},
+    '3-VEENDELO': {'prefijo': 'VEEN', 'pais': 'Colombia', 'tipo_calculo': 'B'},
+    '4-MEGA TIENDAS PERUANAS': {'prefijo': 'MGA-PE', 'pais': 'Perú', 'tipo_calculo': 'A'},
+    '5-DETODOPARATODOS': {'prefijo': 'DTPT', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+    '6-COMPRAFACIL': {'prefijo': 'CFA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+    '7-COMPRA-YA': {'prefijo': 'CPYA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+    '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Chile', 'tipo_calculo': 'D'}
+}
