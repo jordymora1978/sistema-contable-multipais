@@ -783,10 +783,18 @@ elif page == "📁 Procesar Archivos":
 
                     # --- RE-CALCULAR CAMPOS ESPECÍFICOS Y UTILIDADES DESPUÉS DE MERGES ---
                     # Ahora que todos los datos están fusionados, aplicar los cálculos finales
+
+                    # FIX: Asegurar que logistic_weight_lbs y quantity sean numéricos y no NaN
+                    # antes de usarlos en la operación de Peso_kg.
+                    df_processed['logistic_weight_lbs'] = pd.to_numeric(df_processed['logistic_weight_lbs'], errors='coerce').fillna(0)
+                    df_processed['quantity'] = pd.to_numeric(df_processed['quantity'], errors='coerce').fillna(1) # quantity defaults to 1 if missing for multiplication
+
                     df_processed['Bodegal'] = df_processed['logistic_type'].apply(lambda x: 3.5 if str(x).lower() == 'xd_drop_off' else 0)
                     df_processed['Socio_cuenta'] = df_processed['order_status_meli'].apply(lambda x: 0 if str(x).lower() == 'refunded' else 1)
                     df_processed['Impuesto por facturacion'] = df_processed['order_status_meli'].apply(lambda x: 1 if str(x).lower() in ['approved', 'in mediation'] else 0)
-                    df_processed['Peso_kg'] = df_processed.apply(lambda row: (row['logistic_weight_lbs'].fillna(0) * row['quantity'].fillna(1)) * 0.453592, axis=1)
+                    
+                    # Cálculo de Peso_kg sin .fillna en el apply, ya que se manejó antes
+                    df_processed['Peso_kg'] = (df_processed['logistic_weight_lbs'] * df_processed['quantity']) * 0.453592
                     df_processed['Gss Logistica'] = df_processed['Peso_kg'].apply(obtener_gss_logistica)
 
                     # Final calcular Utilidad Gss y Utilidad Socio (separamos la lógica por tipo de cálculo)
@@ -884,7 +892,7 @@ elif page == "💱 Configurar TRM":
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.markdown("### 🇨🇴 Colombia")
+            st.markdown("### �🇴 Colombia")
             cop_trm = st.number_input(
                 "COP por 1 USD",
                 value=float(st.session_state.trm_data.get('COP', 4000.0)),
@@ -1031,3 +1039,4 @@ st.markdown("""
     <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
 </div>
 """, unsafe_allow_html=True)
+�
