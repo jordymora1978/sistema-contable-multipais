@@ -7,15 +7,15 @@ from supabase import create_client, Client
 url = "https://qzexuqkedukcwcyhrpza.supabase.co"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0"
 
-# 🤖 Crear cliente de Supabase
+# 🤖 Crear cliente Supabase
 supabase: Client = create_client(url, key)
 
-# 🖥️ Interfaz básica
+# 🖥️ Título
 st.title("Sistema contable multi-país")
 st.write("Bienvenido, este es un sistema de prueba para Colombia, Perú y Chile.")
 st.subheader("🔍 Probando conexión con Supabase...")
 
-# 📥 Formulario para agregar TRM
+# 📥 Formulario para ingresar nueva TRM
 st.subheader("🆕 Agregar nueva TRM")
 with st.form("form_trm"):
     currency = st.text_input("Moneda (ej: COP, PEN, CLP)").upper()
@@ -24,25 +24,36 @@ with st.form("form_trm"):
     submitted = st.form_submit_button("Guardar")
 
     if submitted:
-        if currency and rate > 0 and updated_by:
+        # ✅ Validación
+        if not currency or len(currency) != 3:
+            st.warning("⚠️ Ingresa un código de moneda válido de 3 letras (ej: COP).")
+        elif rate <= 0:
+            st.warning("⚠️ La tasa debe ser mayor que cero.")
+        elif not updated_by.strip():
+            st.warning("⚠️ El campo 'Actualizado por' no puede estar vacío.")
+        else:
             try:
+                now = datetime.utcnow().isoformat()
                 response = supabase.table("trm_rates").insert({
                     "currency": currency,
                     "rate": rate,
-                    "date_updated": datetime.utcnow().isoformat(),
+                    "date_updated": now,
                     "updated_by": updated_by
                 }).execute()
-                st.success("✅ TRM registrada con éxito")
-            except Exception as e:
-                st.error("❌ Error al guardar la TRM")
-                st.exception(e)
-        else:
-            st.warning("⚠️ Todos los campos son obligatorios")
 
-# 📊 Mostrar últimos datos
+                if response.status_code == 201:
+                    st.success("✅ Nueva TRM guardada exitosamente.")
+                else:
+                    st.error("❌ Error al guardar en Supabase.")
+                    st.json(response.json())
+            except Exception as e:
+                st.error("❌ Error inesperado al guardar TRM.")
+                st.exception(e)
+
+# 📊 Mostrar últimos registros
 st.subheader("📄 Últimos registros de TRM")
 try:
-    data = supabase.table("trm_rates").select("*").limit(10).execute()
+    data = supabase.table("trm_rates").select("*").limit(10).order("id", desc=True).execute()
     df = pd.DataFrame(data.data)
     st.dataframe(df)
 except Exception as e:
