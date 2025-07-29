@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 from supabase import create_client, Client
 
 # 🔐 Claves de conexión a Supabase
@@ -14,15 +15,36 @@ st.title("Sistema contable multi-país")
 st.write("Bienvenido, este es un sistema de prueba para Colombia, Perú y Chile.")
 st.subheader("🔍 Probando conexión con Supabase...")
 
-# 📊 Intentar leer datos de la tabla trm_rates
+# 📥 Formulario para agregar TRM
+st.subheader("🆕 Agregar nueva TRM")
+with st.form("form_trm"):
+    currency = st.text_input("Moneda (ej: COP, PEN, CLP)").upper()
+    rate = st.number_input("Tasa", min_value=0.0, format="%.4f")
+    updated_by = st.text_input("Actualizado por", value="jordy_mora")
+    submitted = st.form_submit_button("Guardar")
+
+    if submitted:
+        if currency and rate > 0 and updated_by:
+            try:
+                response = supabase.table("trm_rates").insert({
+                    "currency": currency,
+                    "rate": rate,
+                    "date_updated": datetime.utcnow().isoformat(),
+                    "updated_by": updated_by
+                }).execute()
+                st.success("✅ TRM registrada con éxito")
+            except Exception as e:
+                st.error("❌ Error al guardar la TRM")
+                st.exception(e)
+        else:
+            st.warning("⚠️ Todos los campos son obligatorios")
+
+# 📊 Mostrar últimos datos
+st.subheader("📄 Últimos registros de TRM")
 try:
     data = supabase.table("trm_rates").select("*").limit(10).execute()
-    st.success("✅ Datos de TRM obtenidos con éxito")
-    
-    # Mostrar como tabla interactiva
     df = pd.DataFrame(data.data)
     st.dataframe(df)
-
 except Exception as e:
     st.error("❌ Error al leer datos de trm_rates")
     st.exception(e)
