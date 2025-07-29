@@ -26,3 +26,39 @@ def init_supabase():
     except Exception as e:
         st.error(f"Error conectando a Supabase: {str(e)}")
         return None
+        def test_connection():
+    try:
+        supabase = init_supabase()
+        if supabase:
+            result = supabase.table('trm_rates').select('count').execute() 
+            return True, "✅ Conectado a Supabase"
+        return False, "❌ No se pudo inicializar Supabase"
+    except Exception as e:
+        return False, f"❌ Error de conexión: {str(e)}"
+
+@st.cache_data(ttl=3600)
+def get_store_config():
+    try:
+        supabase = init_supabase()
+        if supabase:
+            result = supabase.table('store_config').select('*').eq('activa', True).execute()
+            if result.data:
+                return {row['account_name']: {
+                    'prefijo': row['prefijo'],
+                    'pais': row['pais'],
+                    'tipo_calculo': row['tipo_calculo']
+                } for row in result.data}
+        return {}
+    except Exception as e:
+        st.error(f"Error obteniendo configuración: {str(e)}")
+        
+    return {
+        '1-TODOENCARGO-CO': {'prefijo': 'TDC', 'pais': 'Colombia', 'tipo_calculo': 'A'},
+        '2-MEGATIENDA SPA': {'prefijo': 'MEGA', 'pais': 'Chile', 'tipo_calculo': 'B'},
+        '3-VEENDELO': {'prefijo': 'VEEN', 'pais': 'Colombia', 'tipo_calculo': 'B'},
+        '4-MEGA TIENDAS PERUANAS': {'prefijo': 'MGA-PE', 'pais': 'Perú', 'tipo_calculo': 'A'},
+        '5-DETODOPARATODOS': {'prefijo': 'DTPT', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+        '6-COMPRAFACIL': {'prefijo': 'CFA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+        '7-COMPRA-YA': {'prefijo': 'CPYA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+        '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Chile', 'tipo_calculo': 'D'}
+    }
