@@ -625,3 +625,146 @@ elif page == "💱 Configurar TRM":
             cop_trm = st.number_input(
                 "COP por 1 USD",
                 value=float(st.session_state.trm_data.get('COP', 4
+            cop_trm = st.number_input(
+                "COP por 1 USD",
+                value=float(st.session_state.trm_data.get('COP', 4000.0)),
+                step=50.0,
+                min_value=1000.0,
+                max_value=10000.0
+            )
+        
+        with col2:
+            st.markdown("### 🇵🇪 Perú")
+            pen_trm = st.number_input(
+                "PEN por 1 USD",
+                value=float(st.session_state.trm_data.get('PEN', 3.8)),
+                step=0.1,
+                min_value=1.0,
+                max_value=10.0
+            )
+        
+        with col3:
+            st.markdown("### 🇨🇱 Chile")
+            clp_trm = st.number_input(
+                "CLP por 1 USD",
+                value=float(st.session_state.trm_data.get('CLP', 900.0)),
+                step=10.0,
+                min_value=500.0,
+                max_value=1500.0
+            )
+        
+        submitted = st.form_submit_button("💾 Actualizar TRM", type="primary")
+    
+    if submitted:
+        try:
+            new_trm_data = {
+                'COP': cop_trm,
+                'PEN': pen_trm,
+                'CLP': clp_trm,
+                'last_update': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            st.session_state.trm_data.update(new_trm_data)
+            
+            # Guardar en Supabase
+            success, message = save_trm_rates(new_trm_data)
+            
+            if success:
+                st.success("✅ Tasas TRM actualizadas exitosamente!")
+                st.rerun()
+            else:
+                st.error(f"❌ Error: {message}")
+        
+        except Exception as e:
+            st.error(f"❌ Error actualizando TRM: {str(e)}")
+
+elif page == "📋 Fórmulas de Negocio":
+    st.header("📋 Fórmulas de Negocio por Tipo de Tienda")
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["Tipo A", "Tipo B", "Tipo C", "Tipo D"])
+    
+    with tab1:
+        st.markdown("### Tipo A: TODOENCARGO-CO y MEGA TIENDAS PERUANAS")
+        st.markdown("""
+        <div class="formula-box">
+        <h4>📐 Fórmula Principal</h4>
+        <strong>Utilidad Gss = MELI USD - Costo Amazon - Total - Aditional</strong><br><br>
+        
+        <h5>🔧 Componentes:</h5>
+        • <strong>Costo Amazon:</strong> Declare Value × quantity<br>
+        • <strong>Aditional:</strong> Quantity × UnitPrice (del archivo Aditionals)<br>
+        • <strong>MELI USD:</strong> net_real_amount / TRM<br>
+        • <strong>Total:</strong> del archivo Anican Logistics<br><br>
+        
+        <h5>🌍 Países aplicables:</h5>
+        • Colombia (TODOENCARGO-CO)<br>
+        • Perú (MEGA TIENDAS PERUANAS)
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with tab2:
+        st.markdown("### Tipo B: MEGATIENDA SPA y VEENDELO")
+        st.markdown("""
+        <div class="formula-box">
+        <h4>📐 Fórmula Principal</h4>
+        <strong>Utilidad Gss = MELI USD - Costo cxp - Costo Amazon - Bodegal - Socio_cuenta</strong><br><br>
+        
+        <h5>🔧 Componentes:</h5>
+        • <strong>Costo cxp:</strong> Amt. Due (del archivo Chile Express CXP)<br>
+        • <strong>Bodegal:</strong> 3.5 si logistic_type = "xd_drop_off", sino 0<br>
+        • <strong>Socio_cuenta:</strong> 0 si order_status_meli = "refunded", sino 1<br>
+        • <strong>Asignacion:</strong> prefijo + Serial# para unir con CXP<br><br>
+        
+        <h5>🌍 Países aplicables:</h5>
+        • Chile (MEGATIENDA SPA)<br>
+        • Colombia (VEENDELO)
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with tab3:
+        st.markdown("### Tipo C: DETODOPARATODOS, COMPRAFACIL, COMPRA-YA")
+        st.markdown("""
+        <div class="formula-box">
+        <h4>📐 Fórmula Principal</h4>
+        <strong>Utilidad Gss = MELI USD - Costo Amazon - Total - Aditional - Impuesto por facturación</strong><br><br>
+        
+        <h5>🔧 Lógica Especial:</h5>
+        • <strong>Impuesto por facturación:</strong> 1 si order_status_meli = "approved" o "in mediation", sino 0<br>
+        • <strong>Utilidad Socio:</strong> 7.5 si Utilidad > 7.5, sino Utilidad<br>
+        • <strong>Si Utilidad > 7.5:</strong> Utilidad Gss = Utilidad - Utilidad Socio<br>
+        • <strong>Si Utilidad ≤ 7.5:</strong> Utilidad Gss = 0<br><br>
+        
+        <h5>🌍 Países aplicables:</h5>
+        • Colombia (todas las tiendas tipo C)
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with tab4:
+        st.markdown("### Tipo D: FABORCARGO")
+        st.markdown("""
+        <div class="formula-box">
+        <h4>📐 Fórmula Principal</h4>
+        <strong>Utilidad Gss = Gss Logística + Impuesto Gss - Amt. Due</strong><br><br>
+        
+        <h5>🔧 Componentes:</h5>
+        • <strong>Peso:</strong> logistic_weight_lbs × quantity × 0.453592 (conversión a kg)<br>
+        • <strong>Gss Logística:</strong> según tabla ANEXO A por peso en kg<br>
+        • <strong>Impuesto Gss:</strong> Arancel + IVA (del archivo CXP)<br>
+        • <strong>Bodegal:</strong> 3.5 si logistic_type = "xd_drop_off", sino 0<br><br>
+        
+        <h5>🌍 Países aplicables:</h5>
+        • Colombia (FABORCARGO)
+        </div>
+        """, unsafe_allow_html=True)
+
+# ============================
+# FOOTER
+# ============================
+
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #666; padding: 1rem;'>
+    <p><strong>Sistema Contable Multi-País v3.0</strong> | Powered by Streamlit + Supabase</p>
+    <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
+</div>
+""", unsafe_allow_html=True)
