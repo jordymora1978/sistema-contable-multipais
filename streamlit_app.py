@@ -1,84 +1,125 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
 from datetime import datetime
+from supabase import create_client, Client
 
-# 🔐 Claves de conexión a Supabase
-url = "https://qzexuqkedukcwcyhrpza.supabase.co"
-key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0"
+# Configuración Supabase
+SUPABASE_URL = "https://qzexuqkedukcwcyhrpza.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 🤖 Crear cliente de Supabase
-supabase: Client = create_client(url, key)
+# Configuración de la app
+st.set_page_config(page_title="Sistema Contable Multi-País", layout="wide")
+st.markdown("""
+    <style>
+        .main {background-color: #0e1117;}
+        .stApp {background-color: #0e1117; color: white;}
+        .stSelectbox > div {color: black !important;}
+        .stDataFrame {background-color: white; color: black;}
+    </style>
+""", unsafe_allow_html=True)
 
-# 🖥️ Interfaz
-st.set_page_config(page_title="Sistema contable multi-país", layout="centered")
-st.title("Sistema contable multi-país")
-st.write("Bienvenido, este es un sistema de prueba para Colombia, Perú y Chile.")
+# Sidebar - Panel de Control
+st.sidebar.title("🧿 Panel de Control")
+menu = st.sidebar.selectbox("Selecciona una sección:", ["Dashboard", "Configurar TRM", "Procesar Archivos", "Análisis de Utilidad", "Fórmulas de Negocio"])
 
-st.subheader("🔍 Probando conexión con Supabase...")
+# Función: Obtener TRMs actuales
+def obtener_trm():
+    try:
+        result = supabase.table("trm_rates").select("*").order("id", desc=True).execute()
+        df = pd.DataFrame(result.data)
+        if 'date_updated' in df.columns:
+            df['date_updated'] = pd.to_datetime(df['date_updated'])
+        if 'created_at' in df.columns:
+            df['created_at'] = pd.to_datetime(df['created_at'])
+        return df
+    except Exception as e:
+        st.error("❌ Error al leer datos de Supabase.")
+        st.exception(e)
+        return pd.DataFrame()
 
-# 📊 Leer datos de TRM
-try:
-    data = supabase.table("trm_rates").select("*").order("id", desc=True).limit(100).execute()
-    df = pd.DataFrame(data.data)
-    if not df.empty:
-        df["created_at"] = pd.to_datetime(df.get("created_at", datetime.now()))
+# Página: Configurar TRM
+if menu == "Configurar TRM":
+    st.header("🔍 Probando conexión con Supabase...")
+    df_trm = obtener_trm()
+    if not df_trm.empty:
         st.success("✅ Datos de TRM obtenidos con éxito")
-        st.dataframe(df)
-    else:
-        st.warning("⚠️ No hay datos en la tabla trm_rates")
+        st.dataframe(df_trm)
 
-except Exception as e:
-    st.error("❌ Error al leer datos de Supabase.")
-    st.exception(e)
-
-# 🆕 Formulario para agregar o editar TRM
-st.subheader("🛠️ Agregar o Editar TRM")
-
-with st.form("form_trm"):
-    moneda = st.text_input("Moneda (ej: COP, PEN, CLP)").strip().upper()
+    st.subheader("🛠️ Agregar o Editar TRM")
+    moneda = st.text_input("Moneda (ej: COP, PEN, CLP)")
     tasa = st.number_input("Tasa", min_value=0.0001, format="%.4f")
     actualizado_por = st.text_input("Actualizado por", value="jordy_mora")
+    editar = st.checkbox("Editar si ya existe")
 
-    modo_edicion = st.checkbox("Editar si ya existe")
-
-    submitted = st.form_submit_button("💾 Guardar TRM")
-
-    if submitted:
-        if moneda and tasa > 0 and actualizado_por:
-            try:
-                if modo_edicion:
-                    # Buscar si ya existe y actualizar
-                    existing = supabase.table("trm_rates").select("*").eq("currency", moneda).execute()
-                    if existing.data:
-                        row_id = existing.data[0]["id"]
-                        response = supabase.table("trm_rates").update({
-                            "rate": tasa,
-                            "updated_by": actualizado_por,
-                            "date_updated": datetime.now().isoformat()
-                        }).eq("id", row_id).execute()
-                        st.success("✅ TRM actualizada correctamente")
-                    else:
-                        st.warning("⚠️ No existe TRM para esa moneda, se insertará nueva.")
-                        response = supabase.table("trm_rates").insert({
-                            "currency": moneda,
-                            "rate": tasa,
-                            "updated_by": actualizado_por,
-                            "date_updated": datetime.now().isoformat()
-                        }).execute()
-                        st.success("✅ TRM insertada correctamente")
-
+    if st.button("💾 Guardar TRM"):
+        try:
+            fecha_actual = datetime.now().isoformat()
+            if editar:
+                # Buscar ID más reciente de esa moneda
+                registros = df_trm[df_trm['currency'].str.lower() == moneda.lower()]
+                if not registros.empty:
+                    ultimo_id = registros.iloc[0]['id']
+                    response = supabase.table("trm_rates").update({
+                        "rate": tasa,
+                        "updated_by": actualizado_por,
+                        "date_updated": fecha_actual
+                    }).eq("id", ultimo_id).execute()
+                    st.success("✅ TRM actualizada con éxito")
                 else:
-                    response = supabase.table("trm_rates").insert({
+                    st.warning("⚠️ No se encontró TRM previa para editar. Agregando nueva...")
+                    supabase.table("trm_rates").insert({
                         "currency": moneda,
                         "rate": tasa,
                         "updated_by": actualizado_por,
-                        "date_updated": datetime.now().isoformat()
+                        "date_updated": fecha_actual
                     }).execute()
-                    st.success("✅ TRM insertada correctamente")
+                    st.success("✅ TRM agregada con éxito")
+            else:
+                supabase.table("trm_rates").insert({
+                    "currency": moneda,
+                    "rate": tasa,
+                    "updated_by": actualizado_por,
+                    "date_updated": fecha_actual
+                }).execute()
+                st.success("✅ TRM agregada con éxito")
+        except Exception as e:
+            st.error("❌ Error inesperado al guardar TRM.")
+            st.exception(e)
 
-            except Exception as e:
-                st.error("❌ Error inesperado al guardar TRM.")
-                st.exception(e)
-        else:
-            st.warning("⚠️ Todos los campos son obligatorios.")
+# Página: Procesar Archivos
+elif menu == "Procesar Archivos":
+    st.header("📂 Cargar y Procesar Archivos")
+    st.write("Sube los archivos necesarios. El sistema calculará las utilidades según el tipo de tienda:")
+    st.markdown("""
+    - **Tipo A**: TODOENCARGO-CO, MEGA TIENDAS PERUANAS  
+    - **Tipo B**: MEGATIENDA SPA, VEENDELO  
+    - **Tipo C**: DETODOPARATODOS, COMPRAFACIL, COMPRA-YA  
+    - **Tipo D**: FABORCARGO
+    """)
+
+    st.subheader("📁 Archivos Principales")
+    principal_file = st.file_uploader("DRAPIFY (Orders_XXXXXX)", type=["xlsx", "xls"])
+
+    st.subheader("🚚 Archivos Logísticos")
+    cxp_file = st.file_uploader("Chile Express (CXP)", type=["xlsx", "xls"])
+    anican_file = st.file_uploader("Anican Logistics", type=["xlsx", "xls"])
+    add_file = st.file_uploader("Anican Aditionals", type=["xlsx", "xls"])
+
+    if st.button("🧮 Procesar y Calcular Utilidades"):
+        st.warning("⚠️ Esta sección aún no está implementada. En desarrollo...")
+
+# Página: Dashboard
+elif menu == "Dashboard":
+    st.header("📊 Dashboard General")
+    st.info("⚠️ Esta sección está en desarrollo.")
+
+# Página: Análisis de Utilidad
+elif menu == "Análisis de Utilidad":
+    st.header("📈 Análisis de Utilidad")
+    st.info("⚠️ Módulo en construcción para análisis avanzados por tienda.")
+
+# Página: Fórmulas de Negocio
+elif menu == "Fórmulas de Negocio":
+    st.header("📐 Fórmulas de Negocio")
+    st.info("⚠️ Próximamente podrás configurar márgenes y reglas por país.")
