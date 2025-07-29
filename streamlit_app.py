@@ -87,15 +87,14 @@ st.markdown("""
 
 @st.cache_resource
 def init_supabase():
-    """Inicializa conexión con Supabase usando secrets"""
+    """Inicializa conexión con Supabase"""
     try:
-        url = st.secrets["supabase"]["url"]
-        key = st.secrets["supabase"]["anon_key"]
+        url = "https://qzexuqkedukcwcyhrpza.supabase.co"
+        key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0"
         supabase: Client = create_client(url, key)
         return supabase
     except Exception as e:
         st.error(f"Error conectando a Supabase: {str(e)}")
-        st.error("Verifica que las credenciales estén configuradas en Streamlit Cloud")
         return None
 
 def test_connection():
