@@ -26,7 +26,7 @@ def init_supabase():
     except Exception as e:
         st.error(f"Error conectando a Supabase: {str(e)}")
         return None
-        def test_connection():
+    def test_connection():
     try:
         supabase = init_supabase()
         if supabase:
