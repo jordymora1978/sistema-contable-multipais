@@ -156,7 +156,7 @@ def get_trm_rates():
                 result = supabase.table('trm_rates').select('*').order('created_at', desc=True).execute()
             except Exception as e:
                 # Fallback si 'created_at' no existe o la consulta falla
-                st.warning(f"⚠️ No se pudo ordenar por 'created_at': {e}. Intentando ordenar por 'id'. Asegúrate de que 'created_at' sea una columna de tipo timestamp en tu tabla 'trm_rates' de Supabase con DEFAULT now().")
+                st.info(f"ℹ️ No se pudo ordenar por 'created_at' en tabla 'trm_rates': {e}. Intentando ordenar por 'id'. Asegúrate de que 'created_at' sea una columna de tipo timestamp en tu tabla 'trm_rates' de Supabase con DEFAULT now().")
                 result = supabase.table('trm_rates').select('*').order('id', desc=True).execute()
                 
             if result.data:
@@ -198,12 +198,10 @@ def save_trm_rates(trm_data):
                         'currency': currency,
                         'rate': float(rate),
                         'updated_by': 'streamlit_app',
-                        'date_updated': datetime.now().isoformat(), # Asegurarse de que esta columna exista
-                        'created_at': datetime.now().isoformat() # Asegurarse de que esta columna exista y sea timestamp con default now() en DB
+                        'date_updated': datetime.now().isoformat(), 
+                        # 'created_at': datetime.now().isoformat() # REMOVED: Let Supabase handle if it's DEFAULT now()
                     })
             if records_to_insert:
-                # Supabase inserta automáticamente 'created_at' si la columna está configurada con DEFAULT now()
-                # y no se pasa en el insert. Aquí la estamos pasando explícitamente.
                 result = supabase.table('trm_rates').insert(records_to_insert).execute()
                 return True, "TRM guardado exitosamente"
             return False, "No hay datos TRM para guardar"
@@ -225,7 +223,7 @@ def save_orders_to_supabase(df_processed_for_save):
             order_dict = {
                 'order_id': str(row.get('order_id', '')),
                 'account_name': str(row.get('account_name', '')),
-                'serial_number': str(row.get('serial_number', '')),
+                'serial_number': str(row.get('serial', '')), # Usar 'serial' ya que el DataFrame está en snake_case
                 'asignacion': str(row.get('asignacion', '')),
                 'pais': str(row.get('pais', '')),
                 'tipo_calculo': str(row.get('tipo_calculo', '')),
@@ -249,6 +247,8 @@ def save_orders_to_supabase(df_processed_for_save):
                 'impuesto_gss': float(row.get('impuesto_gss', 0)),
                 'utilidad_gss': float(row.get('utilidad_gss', 0)),
                 'utilidad_socio': float(row.get('utilidad_socio', 0))
+                # Add other columns from 'first_cols' and 'numeric_cols' here if they are relevant for the DB schema
+                # Ensure DB column names match these snake_case keys exactly.
             }
             orders_data.append(order_dict)
             
@@ -279,7 +279,7 @@ def get_orders_from_supabase(limit=1000):
                 result = supabase.table('orders').select('*').order('created_at', desc=True).limit(limit).execute()
             except Exception as e:
                 # Fallback a 'order_id' si 'created_at' no existe o falla
-                st.warning(f"⚠️ No se pudo ordenar por 'created_at' en tabla 'orders': {e}. Intentando ordenar por 'order_id'.")
+                st.info(f"ℹ️ No se pudo ordenar por 'created_at' en tabla 'orders': {e}. Intentando ordenar por 'order_id'.")
                 result = supabase.table('orders').select('*').order('order_id', desc=True).limit(limit).execute()
             
             if result.data:
@@ -301,6 +301,7 @@ def get_orders_from_supabase(limit=1000):
 
 # Función auxiliar para normalizar nombres de columnas a snake_case
 def to_snake_case(name):
+    name = str(name) # Ensure name is a string
     name = re.sub(r'[^a-zA-Z0-9_]', '', name) # Eliminar caracteres no deseados
     name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
     name = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', name)
@@ -793,15 +794,15 @@ elif page == "📁 Procesar Archivos":
                             if df_cxp is not None:
                                 df_cxp['asignacion_cxp'] = df_cxp['asignacion_cxp'].astype(str).str.strip()
                                 
-                                # Unir con el DataFrame principal
+                                # Unir con el DataFrame principal, forzar copia
                                 df_processed = df_processed.merge(
                                     df_cxp[['asignacion_cxp', 'amt_due_cxp', 'arancel_cxp_merge', 'iva_cxp_merge']].rename(
                                         columns={'arancel_cxp_merge': 'arancel_cxp', 'iva_cxp_merge': 'iva_cxp'}), # snake_case
                                     left_on='asignacion', # Originalmente 'Asignacion' ahora 'asignacion'
                                     right_on='asignacion_cxp',
                                     how='left'
-                                )
-                                
+                                ).copy() # <<<--- AÑADIDO .copy() AQUÍ
+
                                 # --- INICIALIZACIÓN EXPLÍCITA DE COLUMNAS CXP DESPUÉS DEL MERGE ---
                                 # Esto garantiza que las columnas siempre existan en df_processed
                                 # incluso si el merge no tuvo coincidencias.
@@ -917,6 +918,10 @@ elif page == "📁 Procesar Archivos":
                     df_to_save_to_supabase = df_processed.groupby('order_id').agg(agg_dict).reset_index()
 
                     st.write("DEBUG: Columnas de df_to_save_to_supabase antes de guardar:", df_to_save_to_supabase.columns.tolist())
+                    st.write("DEBUG: ¿Hay duplicados en order_id en df_to_save_to_supabase?", df_to_save_to_supabase['order_id'].duplicated().any())
+                    if df_to_save_to_supabase['order_id'].duplicated().any():
+                        st.error("DEBUG CRITICAL: ¡Hay order_id duplicados en el DataFrame a guardar! Esto causará el error ON CONFLICT.")
+                        st.write("DEBUG: Duplicados:", df_to_save_to_supabase[df_to_save_to_supabase['order_id'].duplicated(keep=False)])
 
 
                     # Guardar en Supabase el DataFrame agregado
