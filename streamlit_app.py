@@ -212,21 +212,22 @@ def save_trm_rates(trm_data):
     except Exception as e:
         return False, f"Error al guardar TRM en Supabase: {str(e)}"
 
-def save_orders_to_supabase(df):
-    """Guarda órdenes procesadas en Supabase"""
+def save_orders_to_supabase(df_processed_for_save):
+    """Guarda órdenes procesadas en Supabase.
+    df_processed_for_save es un DataFrame que ya ha sido agregado por order_id.
+    """
     try:
         supabase = init_supabase()
         if not supabase:
             return False, "No hay conexión a Supabase"
         
-        # Prepara los datos para la inserción, limpiando y ajustando tipos
         orders_data = []
-        for _, row in df.iterrows():
+        for _, row in df_processed_for_save.iterrows():
             order_dict = {
                 'order_id': str(row.get('order_id', '')),
                 'account_name': str(row.get('account_name', '')),
-                'serial_number': str(row.get('Serial#', '')),
-                'asignacion': str(row.get('Asignacion', '')),
+                'serial_number': str(row.get('serial_number', '')), # Ahora se espera 'serial_number' del df agregado
+                'asignacion': str(row.get('asignacion', '')), # Ahora se espera 'asignacion' del df agregado
                 'pais': str(row.get('pais', '')),
                 'tipo_calculo': str(row.get('tipo_calculo', '')),
                 'moneda': str(row.get('moneda', '')),
@@ -234,21 +235,21 @@ def save_orders_to_supabase(df):
                 'quantity': int(row.get('quantity', 0)),
                 'logistic_type': str(row.get('logistic_type', '')),
                 'order_status_meli': str(row.get('order_status_meli', '')),
-                'declare_value': float(row.get('Declare Value', 0)),
+                'declare_value': float(row.get('declare_value', 0)),
                 'net_real_amount': float(row.get('net_real_amount', 0)),
                 'logistic_weight_lbs': float(row.get('logistic_weight_lbs', 0)),
-                'meli_usd': float(row.get('MELI USD', 0)),
-                'costo_amazon': float(row.get('Costo Amazon', 0)),
-                'total_anican': float(row.get('Total_Anican', 0)),
-                'aditional': float(row.get('Aditional', 0)),
-                'bodegal': float(row.get('Bodegal', 0)),
-                'socio_cuenta': float(row.get('Socio_cuenta', 0)),
-                'costo_cxp': float(row.get('Costo cxp', 0)),
-                'impuesto_facturacion': float(row.get('Impuesto por facturacion', 0)),
-                'gss_logistica': float(row.get('Gss Logistica', 0)),
-                'impuesto_gss': float(row.get('Impuesto Gss', 0)),
-                'utilidad_gss': float(row.get('Utilidad Gss', 0)),
-                'utilidad_socio': float(row.get('Utilidad Socio', 0))
+                'meli_usd': float(row.get('meli_usd', 0)),
+                'costo_amazon': float(row.get('costo_amazon', 0)),
+                'total_anican': float(row.get('total_anican', 0)),
+                'aditional': float(row.get('aditional', 0)),
+                'bodegal': float(row.get('bodegal', 0)),
+                'socio_cuenta': float(row.get('socio_cuenta', 0)),
+                'costo_cxp': float(row.get('costo_cxp', 0)),
+                'impuesto_facturacion': float(row.get('impuesto_facturacion', 0)),
+                'gss_logistica': float(row.get('gss_logistica', 0)),
+                'impuesto_gss': float(row.get('impuesto_gss', 0)),
+                'utilidad_gss': float(row.get('utilidad_gss', 0)),
+                'utilidad_socio': float(row.get('utilidad_socio', 0))
             }
             orders_data.append(order_dict)
             
@@ -811,10 +812,9 @@ elif page == "📁 Procesar Archivos":
 
                     # Final calcular Utilidad Gss y Utilidad Socio (separamos la lógica por tipo de cálculo)
                     def apply_final_profit_calculation(row):
-                        tipo = row['tipo_calculo']
+                        tipo = row.get('tipo_calculo', 'A') # Asegurar que tipo_calculo también se acceda con .get()
                         # Usar .get() para acceder a las columnas y proporcionar un valor por defecto de 0.0
                         # Esto previene KeyErrors si por alguna razón una columna no está presente
-                        # aunque se haya inicializado.
                         meli_usd = row.get('MELI USD', 0.0)
                         costo_amazon = row.get('Costo Amazon', 0.0)
                         total_anican = row.get('Total_Anican', 0.0)
@@ -853,8 +853,33 @@ elif page == "📁 Procesar Archivos":
                     st.session_state.processed_data = df_processed
                     st.success("✅ Archivos procesados y utilidades calculadas con éxito!")
 
-                    # Guardar en Supabase
-                    save_success, save_message = save_orders_to_supabase(df_processed)
+                    # --- PREPARAR DATOS PARA GUARDAR EN SUPABASE: AGREGAR POR ORDER_ID ---
+                    # Esto es CRUCIAL para evitar el error "ON CONFLICT DO UPDATE command cannot affect row a second time"
+                    # si hay múltiples líneas de pedido para el mismo order_id en el DataFrame.
+
+                    numeric_cols = [
+                        'quantity', 'declare_value', 'net_real_amount', 
+                        'logistic_weight_lbs', 'meli_usd', 'costo_amazon', 
+                        'total_anican', 'aditional', 'bodegal', 'socio_cuenta', 
+                        'costo_cxp', 'impuesto_facturacion', 'gss_logistica', 
+                        'impuesto_gss', 'utilidad_gss', 'utilidad_socio'
+                    ]
+                    # Definir las columnas a tomar la primera aparición (para campos no sumables)
+                    first_cols = [
+                        'account_name', 'serial_number', 'asignacion', 'pais', 
+                        'tipo_calculo', 'moneda', 'logistic_type', 'order_status_meli',
+                        'date_created' # date_created debería ser el de la primera aparición
+                    ]
+
+                    # Crear un diccionario de funciones de agregación
+                    agg_dict = {col: 'sum' for col in numeric_cols if col in df_processed.columns}
+                    agg_dict.update({col: 'first' for col in first_cols if col in df_processed.columns})
+                    
+                    # Realizar la agregación
+                    df_to_save_to_supabase = df_processed.groupby('order_id').agg(agg_dict).reset_index()
+
+                    # Guardar en Supabase el DataFrame agregado
+                    save_success, save_message = save_orders_to_supabase(df_to_save_to_supabase)
                     if save_success:
                         st.success(f"💾 {save_message}")
                     else:
@@ -867,7 +892,7 @@ elif page == "📁 Procesar Archivos":
                     st.markdown("### 📊 Resumen de Procesamiento")
                     col_p1, col_p2, col_p3, col_p4 = st.columns(4)
                     with col_p1:
-                        st.metric("Total Órdenes", len(df_processed))
+                        st.metric("Total Órdenes Procesadas", len(df_processed))
                     with col_p2:
                         st.metric("Utilidad GSS Calculada", f"${df_processed['Utilidad Gss'].sum():,.2f}")
                     with col_p3:
@@ -875,7 +900,7 @@ elif page == "📁 Procesar Archivos":
                     with col_p4:
                         st.metric("Tiendas Procesadas", df_processed['account_name'].nunique())
                     
-                    st.markdown("### 👀 Vista Previa de Datos Procesados")
+                    st.markdown("### 👀 Vista Previa de Datos Procesados (Primeras 10 filas)")
                     st.dataframe(df_processed[['order_id', 'account_name', 'pais', 'MELI USD', 'Costo Amazon', 
                                                 'Total_Anican', 'Aditional', 'Costo cxp', 'Impuesto Gss',
                                                 'Gss Logistica', 'Utilidad Gss', 'Utilidad Socio']].head(10))
@@ -1014,7 +1039,7 @@ elif page == "📋 Fórmulas de Negocio":
         <h4>📐 Fórmula Principal</h4>
         <strong>Utilidad Gss = MELI USD - Costo Amazon - Total - Aditional - Impuesto por facturación</strong><br><br>
         
-        <h5>🔧 Lógica Especial:</h5>
+        <h5>� Lógica Especial:</h5>
         • <strong>Impuesto por facturación:</strong> 1 si order_status_meli = "approved" o "in mediation", sino 0<br>
         • <strong>Utilidad Socio:</strong> 7.5 si Utilidad > 7.5, sino Utilidad<br>
         • <strong>Si Utilidad > 7.5:</strong> Utilidad Gss = Utilidad - Utilidad Socio<br>
@@ -1054,3 +1079,4 @@ st.markdown("""
     <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
 </div>
 """, unsafe_allow_html=True)
+�
