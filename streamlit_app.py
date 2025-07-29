@@ -49,6 +49,8 @@ if page == "Inicio":
 elif page == "Procesar Archivos":
     st.header("📁 Procesar Archivos")
     st.info("Próximamente: funciones de procesamiento corregidas")
+
+    
     def to_snake_case(name):
     name = str(name)
     name = re.sub(r'[^a-zA-Z0-9_]', '', name)
