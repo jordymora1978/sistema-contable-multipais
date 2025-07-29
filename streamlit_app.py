@@ -57,7 +57,7 @@ st.markdown("""
         }
         .stButton>button:hover {
             background-color: #45a049; /* Tono más oscuro al pasar el ratón */
-            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+            box_shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
             transform: translateY(-2px);
         }
         .stTextInput>div>div>input {
@@ -221,12 +221,15 @@ def calcular_impuesto_facturacion(order_status_meli):
 # @st.cache_data(ttl=600) # Caching por 10 minutos
 def obtener_trm():
     try:
-        # Asegúrate de que 'created_at' sea una columna de tipo timestamp en Supabase
-        result = supabase.table("trm_rates").select("*").order("created_at", desc=True).execute()
+        # Intenta ordenar por 'created_at'. Si no existe, Supabase dará error.
+        # Es CRÍTICO que la columna 'created_at' exista en tu tabla 'trm_rates' en Supabase
+        # y que sea de tipo 'timestamp with time zone' con un default de 'now()'.
+        # Si 'created_at' no existe, usaremos 'id' como fallback para el orden inicial.
+        result = supabase.table("trm_rates").select("*").order("id", desc=True).execute() 
         df = pd.DataFrame(result.data)
         if not df.empty:
             # Convierte las columnas de fecha a datetime si existen
-            for col in ['date_updated', 'created_at']:
+            for col in ['date_updated', 'created_at']: # Aún intentamos convertir created_at si el usuario lo añade después
                 if col in df.columns:
                     # Usar infer_datetime_format=True para mejor compatibilidad de formatos ISO
                     df[col] = pd.to_datetime(df[col], errors='coerce', infer_datetime_format=True)
@@ -235,13 +238,15 @@ def obtener_trm():
                 df['id'] = pd.to_numeric(df['id'], errors='coerce')
                 # Eliminar filas con ID nulo si la conversión falla
                 df = df.dropna(subset=['id'])
-            # Ordenar por moneda y luego por fecha para encontrar el más reciente por moneda
-            df = df.sort_values(by=['currency', 'created_at'], ascending=[True, False])
-            # Eliminar duplicados, manteniendo el más reciente por moneda
+            # Ordenar por moneda y luego por 'created_at' si existe, si no por 'id'
+            if 'created_at' in df.columns and not df['created_at'].isnull().all(): # Verifica si la columna existe y tiene valores
+                 df = df.sort_values(by=['currency', 'created_at'], ascending=[True, False])
+            else:
+                 df = df.sort_values(by=['currency', 'id'], ascending=[True, False]) # Fallback para ordenar si created_at no está o es todo nulo
             df = df.drop_duplicates(subset=['currency'], keep='first')
         return df
     except Exception as e:
-        st.error("❌ Error al leer datos de Supabase.")
+        st.error("❌ Error al leer datos de Supabase. Asegúrate que tu tabla 'trm_rates' tenga las columnas 'id', 'currency', 'rate', 'updated_by', 'date_updated', y **'created_at' (timestamp with time zone, default now())**.")
         st.exception(e)
         return pd.DataFrame()
 
@@ -256,7 +261,7 @@ def guardar_trm(moneda, tasa, actualizado_por, editar_existente):
             "rate": tasa,
             "updated_by": actualizado_por,
             "date_updated": fecha_actual,
-            "created_at": fecha_actual # Usar created_at para el ordenado
+            "created_at": fecha_actual # Asegúrate de que esta columna exista en Supabase
         }).execute()
         st.success(f"✅ TRM para {moneda.upper()} guardada con éxito.")
         
