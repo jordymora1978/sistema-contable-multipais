@@ -1,56 +1,8 @@
-st.info(f"Ref='{ref_col}', Amt='{amt_col}', Arancel='{arancel_col}', IVA='{iva_col}'")
-                        
-                        # Crear DataFrame para merge
-                        df_cxp = pd.DataFrame()
-                        df_cxp['asignacion_cxp'] = df_test_cxp[ref_col].astype(str).str.strip()
-                        df_cxp['amt_due_cxp'] = pd.to_numeric(df_test_cxp[amt_col], errors='coerce').fillna(0.0)
-                        
-                        if arancel_col:
-                            df_cxp['arancel_cxp'] = pd.to_numeric(df_test_cxp[arancel_col], errors='coerce').fillna(0.0)
-                        else:
-                            df_cxp['arancel_cxp'] = 0.0
-                            
-                        if iva_col:
-                            df_cxp['iva_cxp'] = pd.to_numeric(df_test_cxp[iva_col], errors='coerce').fillna(0.0)
-                        else:
-                            df_cxp['iva_cxp'] = 0.0
-                        
-                        break
-                        
-                except Exception as e:
-                    continue
-                    
-            if df_cxp is not None:
-                break
-        
-        if df_cxp is not None:
-            # Hacer merge usando asignacion
-            df_processed = df_processed.merge(
-                df_cxp,
-                left_on='asignacion',
-                right_on='asignacion_cxp',
-                how='left'
-            )
-            
-            # Limpiar columna temporal
-            df_processed = df_processed.drop(columns=['asignacion_cxp'])
-            
-            # Rellenar NaN con 0
-            for col in ['amt_due_cxp', 'arancel_cxp', 'iva_cxp']:
-                df_processed[col] = df_processed[col].fillna(0.0)
-            
-            matches = df_processed['amt_due_cxp'].gt(0).sum()
-            st.success(f"✅ Chile Express (CXP) procesado: {matches} coincidencias encontradas")
-            
-        else:
-            st.warning("⚠️ No se pudieron detectar las columnas esperadas en el archivo CXP")
-            # Inicializar columnas con 0 si no se procesó CXP
-            for col in ['amt_due_cxp', 'arancel_cxp', 'iva_cxp']:
+for col in ['amt_due_cxp', 'arancel_cxp', 'iva_cxp']:
                 df_processed[col] = 0.0
                 
     except Exception as e:
         st.error(f"❌ Error procesando Chile Express (CXP): {str(e)}")
-        # Inicializar columnas con 0 en caso de error
         for col in ['amt_due_cxp', 'arancel_cxp', 'iva_cxp']:
             if col not in df_processed.columns:
                 df_processed[col] = 0.0
@@ -58,9 +10,6 @@ st.info(f"Ref='{ref_col}', Amt='{amt_col}', Arancel='{arancel_col}', IVA='{iva_c
     return df_processed
 
 def apply_business_rules(df_processed):
-    """Aplica reglas de negocio específicas según las correcciones solicitadas"""
-    
-    # CORRECCIÓN: bodegal solo para cuentas de Chile
     cuentas_chile = ['2-MEGATIENDA SPA', '8-FABORCARGO']
     df_processed['bodegal'] = df_processed.apply(
         lambda row: 3.5 if (str(row['account_name']) in cuentas_chile and 
@@ -68,7 +17,6 @@ def apply_business_rules(df_processed):
         axis=1
     )
     
-    # CORRECCIÓN: socio_cuenta solo para cuentas específicas
     cuentas_socio = ['2-MEGATIENDA SPA', '3-VEENDELO']
     df_processed['socio_cuenta'] = df_processed.apply(
         lambda row: (0.0 if str(row.get('order_status_meli', '')).lower() == 'refunded' else 1.0)
@@ -76,7 +24,6 @@ def apply_business_rules(df_processed):
         axis=1
     )
     
-    # CORRECCIÓN: impuesto_facturacion solo para tiendas específicas
     tiendas_impuesto = ['5-DETODOPARATODOS', '6-COMPRAFACIL', '7-COMPRA-YA']
     df_processed['impuesto_facturacion'] = df_processed.apply(
         lambda row: (1.0 if str(row.get('order_status_meli', '')).lower() in ['approved', 'in mediation'] else 0.0)
@@ -84,29 +31,24 @@ def apply_business_rules(df_processed):
         axis=1
     )
     
-    # Calcular peso en kg
     df_processed['peso_kg'] = (df_processed['logistic_weight_lbs'] * df_processed['quantity']) * 0.453592
     
-    # CORRECCIÓN: gss_logistica solo para FABORCARGO
     df_processed['gss_logistica'] = df_processed.apply(
         lambda row: obtener_gss_logistica(row['peso_kg']) if str(row['account_name']) == '8-FABORCARGO' else 0.0,
         axis=1
     )
     
-    # CORRECCIÓN: impuesto_gss solo para FABORCARGO
     df_processed['impuesto_gss'] = df_processed.apply(
         lambda row: (row.get('arancel_cxp', 0.0) + row.get('iva_cxp', 0.0))
         if str(row['account_name']) == '8-FABORCARGO' else 0.0,
         axis=1
     )
     
-    # CORRECCIÓN: costo_cxp = amt_due_cxp
     df_processed['costo_cxp'] = df_processed['amt_due_cxp']
     
     return df_processed
 
 def calculate_final_profits(df):
-    """Calcula utilidades finales según tipo de cálculo"""
     def apply_profit_calculation(row):
         tipo = row.get('tipo_calculo', 'A')
         
@@ -146,10 +88,6 @@ def calculate_final_profits(df):
     df[['utilidad_gss', 'utilidad_socio']] = df.apply(apply_profit_calculation, axis=1)
     return df
 
-# ============================
-# INICIALIZAR SESSION STATE
-# ============================
-
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 
@@ -160,11 +98,6 @@ if 'trm_data' not in st.session_state:
 if 'store_config' not in st.session_state:
     st.session_state.store_config = get_store_config()
 
-# ============================
-# INTERFAZ PRINCIPAL
-# ============================
-
-# Header
 st.markdown("""
 <div class="main-header">
     <h1>🌎 Sistema Contable Multi-País</h1>
@@ -172,10 +105,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Sidebar
 st.sidebar.title("🎛️ Panel de Control")
 
-# Estado de conexión
 st.sidebar.markdown("### 🔗 Estado de Conexión")
 connected, message = test_connection()
 if connected:
@@ -183,7 +114,6 @@ if connected:
 else:
     st.sidebar.error(message)
 
-# Navegación
 page = st.sidebar.selectbox("Selecciona una sección:", [
     "🏠 Inicio",
     "📊 Dashboard en Tiempo Real",
@@ -192,15 +122,10 @@ page = st.sidebar.selectbox("Selecciona una sección:", [
     "📋 Fórmulas de Negocio"
 ])
 
-# TRM actual
 st.sidebar.markdown("### 💱 TRM Actual")
 for currency, rate in st.session_state.trm_data.items():
     if currency != 'last_update':
         st.sidebar.metric(f"{currency}/USD", f"{rate:,.2f}")
-
-# ============================
-# PÁGINAS
-# ============================
 
 if page == "🏠 Inicio":
     st.header("🏠 Bienvenido al Sistema Contable")
@@ -233,7 +158,6 @@ if page == "🏠 Inicio":
     
     st.markdown("---")
     
-    # Estadísticas rápidas
     try:
         success, df = get_orders_from_supabase(100)
         
@@ -271,14 +195,11 @@ elif page == "📊 Dashboard en Tiempo Real":
         success, df = get_orders_from_supabase(1000)
         
         if success and len(df) > 0:
-            # Asegurar que date_created es datetime
             df['date_created'] = pd.to_datetime(df['date_created'], errors='coerce')
             df = df.dropna(subset=['date_created'])
             
-            # Agregar columna de mes para agrupación
             df['mes'] = df['date_created'].dt.to_period('M').astype(str)
             
-            # Filtros
             st.markdown("### 🔍 Filtros")
             col_f1, col_f2, col_f3 = st.columns(3)
             
@@ -294,7 +215,6 @@ elif page == "📊 Dashboard en Tiempo Real":
                 tiendas_disponibles = ['Todas'] + list(df['account_name'].unique())
                 tienda_seleccionada = st.selectbox("Tienda", tiendas_disponibles)
             
-            # Aplicar filtros
             df_filtrado = df.copy()
             if pais_seleccionado != 'Todos':
                 df_filtrado = df_filtrado[df_filtrado['pais'] == pais_seleccionado]
@@ -303,7 +223,6 @@ elif page == "📊 Dashboard en Tiempo Real":
             if tienda_seleccionada != 'Todas':
                 df_filtrado = df_filtrado[df_filtrado['account_name'] == tienda_seleccionada]
             
-            # Métricas principales
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
@@ -318,13 +237,11 @@ elif page == "📊 Dashboard en Tiempo Real":
                 total_ingresos = df_filtrado['meli_usd'].sum()
                 st.metric("💰 Ingresos Total", f"${total_ingresos:,.2f}")
             
-            # Gráficos
             st.markdown("### 📊 Análisis Visual")
             
             tab1, tab2, tab3 = st.tabs(["Por Mes", "Por País", "Por Tienda"])
             
             with tab1:
-                # Utilidades por mes
                 mes_data = df.groupby('mes').agg({
                     'utilidad_gss': 'sum',
                     'utilidad_socio': 'sum',
@@ -342,7 +259,6 @@ elif page == "📊 Dashboard en Tiempo Real":
                 st.plotly_chart(fig_mes, use_container_width=True)
             
             with tab2:
-                # Utilidades por país
                 pais_data = df_filtrado.groupby('pais').agg({
                     'utilidad_gss': 'sum',
                     'utilidad_socio': 'sum',
@@ -358,7 +274,6 @@ elif page == "📊 Dashboard en Tiempo Real":
                 st.plotly_chart(fig_pais, use_container_width=True)
             
             with tab3:
-                # Top tiendas
                 tienda_data = df_filtrado.groupby('account_name').agg({
                     'utilidad_gss': 'sum',
                     'utilidad_socio': 'sum'
@@ -376,7 +291,6 @@ elif page == "📊 Dashboard en Tiempo Real":
                 )
                 st.plotly_chart(fig_tienda, use_container_width=True)
             
-            # Tabla de datos
             st.markdown("### 📋 Datos Detallados")
             st.dataframe(
                 df_filtrado[['order_id', 'account_name', 'pais', 'mes', 'meli_usd', 'utilidad_gss', 'utilidad_socio']].head(20),
@@ -399,7 +313,6 @@ elif page == "📁 Procesar Archivos":
     </div>
     """, unsafe_allow_html=True)
     
-    # Uploaders
     col_drapify, col_otros = st.columns(2)
 
     with col_drapify:
@@ -437,16 +350,13 @@ elif page == "📁 Procesar Archivos":
             try:
                 with st.spinner("Procesando archivos... Esto puede tardar unos segundos."):
                     
-                    # 1. PROCESAR ARCHIVO DRAPIFY
                     st.info("🔄 Paso 1: Procesando archivo Drapify...")
                     df_drapify = pd.read_excel(drapify_file)
                     df_processed = process_drapify_file(df_drapify)
                     
-                    # 2. CALCULAR CAMPOS BÁSICOS
                     st.info("🔄 Paso 2: Calculando campos básicos...")
                     df_processed = calculate_basic_fields(df_processed, st.session_state.store_config, st.session_state.trm_data)
                     
-                    # 3. PROCESAR ARCHIVOS ADICIONALES
                     if anican_file:
                         st.info("🔄 Paso 3a: Procesando Anican Logistics...")
                         df_processed = process_anican_logistics(df_processed, anican_file)
@@ -459,19 +369,15 @@ elif page == "📁 Procesar Archivos":
                         st.info("🔄 Paso 3c: Procesando Chile Express (CXP)...")
                         df_processed = process_cxp_file(df_processed, cxp_file)
                     
-                    # 4. APLICAR REGLAS DE NEGOCIO
                     st.info("🔄 Paso 4: Aplicando reglas de negocio específicas...")
                     df_processed = apply_business_rules(df_processed)
                     
-                    # 5. CALCULAR UTILIDADES FINALES
                     st.info("🔄 Paso 5: Calculando utilidades finales...")
                     df_processed = calculate_final_profits(df_processed)
                     
-                    # Guardar en session state
                     st.session_state.processed_data = df_processed
                     st.success("✅ Archivos procesados y utilidades calculadas con éxito!")
 
-                    # PREPARAR DATOS PARA SUPABASE - AGREGAR POR ORDER_ID
                     st.info("🔄 Paso 6: Preparando datos para Supabase...")
                     
                     numeric_cols = [
@@ -488,15 +394,12 @@ elif page == "📁 Procesar Archivos":
                         'date_created', 'system', 'etiqueta_envio', 'refunded_date'
                     ]
                     
-                    # Crear diccionario de agregación solo con columnas que existen
                     agg_numeric_cols = {col: 'sum' for col in numeric_cols if col in df_processed.columns}
                     agg_first_cols = {col: 'first' for col in first_cols if col in df_processed.columns}
                     agg_dict = {**agg_numeric_cols, **agg_first_cols}
                     
-                    # Agregar por order_id para evitar duplicados en Supabase
                     df_to_save = df_processed.groupby('order_id').agg(agg_dict).reset_index()
                     
-                    # GUARDAR EN SUPABASE
                     st.info("🔄 Paso 7: Guardando en Supabase...")
                     save_success, save_message = save_orders_to_supabase(df_to_save)
                     
@@ -505,10 +408,8 @@ elif page == "📁 Procesar Archivos":
                     else:
                         st.error(f"❌ Error al guardar en Supabase: {save_message}")
                     
-                    # Limpiar cache para actualizar dashboard
                     st.cache_data.clear()
                     
-                    # MOSTRAR RESUMEN
                     st.markdown("### 📊 Resumen de Procesamiento")
                     col_p1, col_p2, col_p3, col_p4 = st.columns(4)
                     
@@ -521,10 +422,8 @@ elif page == "📁 Procesar Archivos":
                     with col_p4:
                         st.metric("Tiendas Procesadas", df_processed['account_name'].nunique())
                     
-                    # VERIFICACIONES DE REGLAS DE NEGOCIO
                     st.markdown("### ✅ Verificación de Reglas de Negocio")
                     
-                    # Verificar FABORCARGO país
                     faborcargo_data = df_processed[df_processed['account_name'] == '8-FABORCARGO']
                     if len(faborcargo_data) > 0:
                         faborcargo_pais = faborcargo_data['pais'].iloc[0]
@@ -533,7 +432,6 @@ elif page == "📁 Procesar Archivos":
                         else:
                             st.error(f"❌ FABORCARGO incorrectamente asignado a: {faborcargo_pais}")
                     
-                    # Verificar bodegal solo en Chile
                     bodegal_chile = df_processed[df_processed['pais'] == 'Chile']['bodegal'].gt(0).sum()
                     bodegal_otros = df_processed[df_processed['pais'] != 'Chile']['bodegal'].gt(0).sum()
                     
@@ -542,7 +440,6 @@ elif page == "📁 Procesar Archivos":
                     else:
                         st.warning(f"⚠️ Bodegal aplicado incorrectamente en otros países ({bodegal_otros} registros)")
                     
-                    # Verificar GSS logística solo para FABORCARGO
                     gss_faborcargo = df_processed[df_processed['account_name'] == '8-FABORCARGO']['gss_logistica'].gt(0).sum()
                     gss_otros = df_processed[df_processed['account_name'] != '8-FABORCARGO']['gss_logistica'].gt(0).sum()
                     
@@ -551,7 +448,6 @@ elif page == "📁 Procesar Archivos":
                     else:
                         st.warning(f"⚠️ GSS_logistica aplicado incorrectamente a otras cuentas ({gss_otros} registros)")
                     
-                    # MOSTRAR ESTADÍSTICAS DE COINCIDENCIAS
                     st.markdown("### 🔍 Estadísticas de Coincidencias")
                     col_s1, col_s2, col_s3 = st.columns(3)
                     
@@ -565,7 +461,6 @@ elif page == "📁 Procesar Archivos":
                         cxp_matches = df_processed['amt_due_cxp'].gt(0).sum()
                         st.metric("Coincidencias CXP", cxp_matches)
                     
-                    # VISTA PREVIA DE DATOS
                     st.markdown("### 👀 Vista Previa de Datos Procesados")
                     preview_cols = [
                         'order_id', 'account_name', 'pais', 'tipo_calculo', 
@@ -575,7 +470,6 @@ elif page == "📁 Procesar Archivos":
                     available_cols = [col for col in preview_cols if col in df_processed.columns]
                     st.dataframe(df_processed[available_cols].head(10), use_container_width=True)
 
-                    # OPCIÓN DE DESCARGA
                     csv = df_processed.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="📥 Descargar Datos Procesados (CSV)",
@@ -593,7 +487,6 @@ elif page == "📁 Procesar Archivos":
 elif page == "💱 Configurar TRM":
     st.header("💱 Configuración de Tasas de Cambio")
     
-    # Recargar TRM actual
     st.session_state.trm_data = get_trm_rates()
 
     with st.form("trm_form"):
@@ -736,7 +629,6 @@ elif page == "📋 Fórmulas de Negocio":
         </div>
         """, unsafe_allow_html=True)
     
-    # Mostrar correcciones implementadas
     st.markdown("---")
     st.markdown("### ✅ Correcciones Implementadas")
     
@@ -757,10 +649,6 @@ elif page == "📋 Fórmulas de Negocio":
     for correccion in correcciones:
         st.markdown(correccion)
 
-# ============================
-# FOOTER
-# ============================
-
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 1rem;'>
@@ -777,10 +665,6 @@ from supabase import create_client, Client
 import time
 import re
 
-# ============================
-# CONFIGURACIÓN INICIAL
-# ============================
-
 st.set_page_config(
     page_title="Sistema Contable Multi-País",
     page_icon="🌎",
@@ -788,7 +672,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS personalizado
 st.markdown("""
 <style>
 .main-header {
@@ -799,7 +682,6 @@ st.markdown("""
     text-align: center;
     margin-bottom: 2rem;
 }
-
 .metric-card {
     background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
     padding: 1.5rem;
@@ -808,7 +690,6 @@ st.markdown("""
     box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     border-left: 5px solid #007bff;
 }
-
 .success-box {
     background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
     padding: 1rem;
@@ -816,7 +697,6 @@ st.markdown("""
     border-left: 4px solid #28a745;
     margin: 1rem 0;
 }
-
 .info-box {
     background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);
     padding: 1rem;
@@ -824,7 +704,6 @@ st.markdown("""
     border-left: 4px solid #17a2b8;
     margin: 1rem 0;
 }
-
 .warning-box {
     background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
     padding: 1rem;
@@ -832,7 +711,6 @@ st.markdown("""
     border-left: 4px solid #ffc107;
     margin: 1rem 0;
 }
-
 .formula-box {
     background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
     padding: 1.5rem;
@@ -841,7 +719,6 @@ st.markdown("""
     margin: 1rem 0;
     box-shadow: 0 2px 10px rgba(0,0,0,0.05);
 }
-
 .stButton > button {
     width: 100%;
     border-radius: 0.5rem;
@@ -851,17 +728,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ============================
-# FUNCIONES SUPABASE
-# ============================
-
 @st.cache_resource
 def init_supabase():
-    """Inicializa conexión con Supabase"""
     try:
         url = st.secrets.get("supabase", {}).get("url", "https://qzexuqkedukcwcyhrpza.supabase.co")
         key = st.secrets.get("supabase", {}).get("key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0")
-        
         supabase: Client = create_client(url, key)
         return supabase
     except Exception as e:
@@ -869,7 +740,6 @@ def init_supabase():
         return None
 
 def test_connection():
-    """Prueba la conexión con Supabase"""
     try:
         supabase = init_supabase()
         if supabase:
@@ -881,7 +751,6 @@ def test_connection():
 
 @st.cache_data(ttl=3600)
 def get_store_config():
-    """Obtiene configuración de tiendas desde Supabase"""
     try:
         supabase = init_supabase()
         if supabase:
@@ -896,7 +765,6 @@ def get_store_config():
     except Exception as e:
         st.error(f"Error obteniendo configuración: {str(e)}")
         
-    # Configuración por defecto CORREGIDA
     return {
         '1-TODOENCARGO-CO': {'prefijo': 'TDC', 'pais': 'Colombia', 'tipo_calculo': 'A'},
         '2-MEGATIENDA SPA': {'prefijo': 'MEGA', 'pais': 'Chile', 'tipo_calculo': 'B'},
@@ -905,12 +773,11 @@ def get_store_config():
         '5-DETODOPARATODOS': {'prefijo': 'DTPT', 'pais': 'Colombia', 'tipo_calculo': 'C'},
         '6-COMPRAFACIL': {'prefijo': 'CFA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
         '7-COMPRA-YA': {'prefijo': 'CPYA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
-        '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Chile', 'tipo_calculo': 'D'}  # CORREGIDO: Chile
+        '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Chile', 'tipo_calculo': 'D'}
     }
 
 @st.cache_data(ttl=600)
 def get_trm_rates():
-    """Obtiene las últimas tasas TRM"""
     try:
         supabase = init_supabase()
         if supabase:
@@ -943,7 +810,6 @@ def get_trm_rates():
         return {'COP': 4000.0, 'PEN': 3.8, 'CLP': 900.0}
 
 def save_trm_rates(trm_data):
-    """Guarda tasas TRM en Supabase"""
     try:
         supabase = init_supabase()
         if supabase:
@@ -965,7 +831,6 @@ def save_trm_rates(trm_data):
         return False, f"Error al guardar TRM: {str(e)}"
 
 def save_orders_to_supabase(df_processed_for_save):
-    """Guarda órdenes procesadas en Supabase"""
     try:
         supabase = init_supabase()
         if not supabase:
@@ -1003,7 +868,6 @@ def save_orders_to_supabase(df_processed_for_save):
             }
             orders_data.append(order_dict)
             
-        # Insertar en lotes
         batch_size = 100
         total_inserted = 0
         
@@ -1019,7 +883,6 @@ def save_orders_to_supabase(df_processed_for_save):
 
 @st.cache_data(ttl=60)
 def get_orders_from_supabase(limit=1000):
-    """Obtiene órdenes desde Supabase"""
     try:
         supabase = init_supabase()
         if supabase:
@@ -1038,12 +901,7 @@ def get_orders_from_supabase(limit=1000):
     except Exception as e:
         return False, pd.DataFrame()
 
-# ============================
-# FUNCIONES DE NEGOCIO
-# ============================
-
 def to_snake_case(name):
-    """Función auxiliar para normalizar nombres de columnas a snake_case"""
     name = str(name)
     name = re.sub(r'[^a-zA-Z0-9_]', '', name)
     name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
@@ -1051,7 +909,6 @@ def to_snake_case(name):
     return name.lower().replace(' ', '_').replace('.', '').replace('#', '').replace('-', '_')
 
 def calcular_asignacion(account_name, serial_number, store_config):
-    """Calcula la columna Asignacion"""
     if pd.isna(account_name) or pd.isna(serial_number):
         return None
     
@@ -1063,7 +920,6 @@ def calcular_asignacion(account_name, serial_number, store_config):
     return None
 
 def obtener_gss_logistica(peso_kg):
-    """Obtiene valor de GSS según peso"""
     ANEXO_A = [
         (0.01, 0.50, 24.01), (0.51, 1.00, 33.09), (1.01, 1.50, 42.17), (1.51, 2.00, 51.25),
         (2.01, 2.50, 61.94), (2.51, 3.00, 71.02), (3.01, 3.50, 80.91), (3.51, 4.00, 89.99),
@@ -1088,16 +944,12 @@ def obtener_gss_logistica(peso_kg):
     return 0
 
 def process_drapify_file(df_drapify):
-    """Procesa el archivo Drapify eliminando duplicados por order_id"""
-    # Normalizar nombres de columnas
     df_drapify.columns = [to_snake_case(col) for col in df_drapify.columns]
     
-    # Verificar duplicados por order_id
     duplicates_count = df_drapify['order_id'].duplicated().sum()
     if duplicates_count > 0:
         st.warning(f"⚠️ Se encontraron {duplicates_count} order_id duplicados en Drapify. Se mantendrá solo la primera ocurrencia.")
     
-    # Eliminar duplicados manteniendo la primera ocurrencia
     df_clean = df_drapify.drop_duplicates(subset=['order_id'], keep='first').copy()
     
     st.info(f"📊 Órdenes originales: {len(df_drapify)} | Órdenes únicas: {len(df_clean)}")
@@ -1105,19 +957,15 @@ def process_drapify_file(df_drapify):
     return df_clean
 
 def calculate_basic_fields(df, store_config, trm_data):
-    """Calcula campos básicos y utilidades iniciales"""
-    # Asegurar tipos de datos básicos
     df['serial'] = df.get('serial', pd.Series(dtype=str)).astype(str)
     df['order_id'] = df.get('order_id', pd.Series(dtype=str)).astype(str)
     df['account_name'] = df.get('account_name', pd.Series(dtype=str)).astype(str)
     
-    # Calcular asignación
     df['asignacion'] = df.apply(
         lambda row: calcular_asignacion(row['account_name'], row.get('serial', ''), store_config),
         axis=1
     )
     
-    # Mapear país y tipo de cálculo
     df['pais'] = df['account_name'].map(
         lambda x: store_config.get(str(x), {}).get('pais', 'desconocido')
     )
@@ -1125,27 +973,22 @@ def calculate_basic_fields(df, store_config, trm_data):
         lambda x: store_config.get(str(x), {}).get('tipo_calculo', 'A')
     )
     
-    # Mapear moneda
     pais_moneda = {'Colombia': 'COP', 'Perú': 'PEN', 'Peru': 'PEN', 'Chile': 'CLP'}
     df['moneda'] = df['pais'].map(pais_moneda)
     
-    # Convertir columnas numéricas importantes
     df['declare_value'] = pd.to_numeric(df.get('declare_value', 0), errors='coerce').fillna(0.0)
     df['quantity'] = pd.to_numeric(df.get('quantity', 1), errors='coerce').fillna(1.0)
     df['net_real_amount'] = pd.to_numeric(df.get('net_real_amount', 0), errors='coerce').fillna(0.0)
     df['logistic_weight_lbs'] = pd.to_numeric(df.get('logistic_weight_lbs', 0), errors='coerce').fillna(0.0)
     
-    # CORRECCIÓN: Calcular costo_amazon correctamente
     df['costo_amazon'] = df['declare_value'] * df['quantity']
     
-    # Calcular meli_usd
     df['meli_usd'] = df.apply(
         lambda row: (row.get('net_real_amount', 0.0) / trm_data.get(row.get('moneda', ''), 1.0))
         if pd.notna(row.get('net_real_amount')) and row.get('moneda') in trm_data else 0.0,
         axis=1
     )
     
-    # Inicializar columnas que se llenarán en los merges
     init_cols = [
         'total_anican', 'aditional', 'amt_due_cxp', 'arancel_cxp', 'iva_cxp',
         'costo_cxp', 'bodegal', 'socio_cuenta', 'impuesto_facturacion', 
@@ -1158,13 +1001,11 @@ def calculate_basic_fields(df, store_config, trm_data):
     return df
 
 def process_anican_logistics(df_processed, anican_file):
-    """Procesa archivo Anican Logistics con detección mejorada de columnas"""
     try:
         df_anican = pd.read_excel(anican_file)
         
         st.info(f"🔍 Columnas detectadas en Anican Logistics: {list(df_anican.columns)}")
         
-        # Buscar columna Reference (no normalizar aún para mostrar original)
         reference_col = None
         total_col = None
         
@@ -1177,25 +1018,21 @@ def process_anican_logistics(df_processed, anican_file):
         if reference_col and total_col:
             st.success(f"✅ Columnas encontradas: Reference='{reference_col}', Total='{total_col}'")
             
-            # Preparar datos para merge
             df_anican_clean = df_anican[[reference_col, total_col]].copy()
             df_anican_clean[reference_col] = df_anican_clean[reference_col].astype(str).str.strip()
             df_anican_clean[total_col] = pd.to_numeric(df_anican_clean[total_col], errors='coerce').fillna(0.0)
             
-            # Renombrar para merge
             df_anican_clean = df_anican_clean.rename(columns={
                 reference_col: 'order_id',
                 total_col: 'total_anican_temp'
             })
             
-            # Hacer merge
             df_processed = df_processed.merge(
                 df_anican_clean,
                 on='order_id',
                 how='left'
             )
             
-            # Asignar valores
             df_processed['total_anican'] = df_processed['total_anican_temp'].fillna(0.0)
             df_processed = df_processed.drop(columns=['total_anican_temp'])
             
@@ -1212,13 +1049,11 @@ def process_anican_logistics(df_processed, anican_file):
     return df_processed
 
 def process_anican_aditionals(df_processed, aditionals_file):
-    """Procesa archivo Anican Aditionals con detección mejorada de columnas"""
     try:
         df_aditionals = pd.read_excel(aditionals_file)
         
         st.info(f"🔍 Columnas detectadas en Anican Aditionals: {list(df_aditionals.columns)}")
         
-        # Buscar columnas exactas
         order_id_col = None
         quantity_col = None
         unitprice_col = None
@@ -1234,30 +1069,25 @@ def process_anican_aditionals(df_processed, aditionals_file):
         if order_id_col and quantity_col and unitprice_col:
             st.success(f"✅ Columnas encontradas: Order Id='{order_id_col}', Quantity='{quantity_col}', UnitPrice='{unitprice_col}'")
             
-            # Preparar datos
             df_aditionals_clean = df_aditionals[[order_id_col, quantity_col, unitprice_col]].copy()
             df_aditionals_clean[order_id_col] = df_aditionals_clean[order_id_col].astype(str).str.strip()
             df_aditionals_clean[quantity_col] = pd.to_numeric(df_aditionals_clean[quantity_col], errors='coerce').fillna(0.0)
             df_aditionals_clean[unitprice_col] = pd.to_numeric(df_aditionals_clean[unitprice_col], errors='coerce').fillna(0.0)
             
-            # Calcular total por línea
             df_aditionals_clean['line_total'] = df_aditionals_clean[quantity_col] * df_aditionals_clean[unitprice_col]
             
-            # Agrupar por order_id
             aditionals_grouped = df_aditionals_clean.groupby(order_id_col)['line_total'].sum().reset_index()
             aditionals_grouped = aditionals_grouped.rename(columns={
                 order_id_col: 'order_id',
                 'line_total': 'aditional_temp'
             })
             
-            # Hacer merge
             df_processed = df_processed.merge(
                 aditionals_grouped,
                 on='order_id',
                 how='left'
             )
             
-            # Asignar valores
             df_processed['aditional'] = df_processed['aditional_temp'].fillna(0.0)
             df_processed = df_processed.drop(columns=['aditional_temp'])
             
@@ -1274,9 +1104,7 @@ def process_anican_aditionals(df_processed, aditionals_file):
     return df_processed
 
 def process_cxp_file(df_processed, cxp_file):
-    """Procesa archivo CXP con detección mejorada y sin duplicar columnas"""
     try:
-        # LIMPIAR columnas CXP existentes antes del merge para evitar duplicados
         cxp_cols_to_clean = ['amt_due_cxp', 'arancel_cxp', 'iva_cxp']
         for col in cxp_cols_to_clean:
             if col in df_processed.columns:
@@ -1292,7 +1120,6 @@ def process_cxp_file(df_processed, cxp_file):
                     
                     st.info(f"🔍 Probando hoja '{sheet_name}', fila {header_row}. Columnas: {list(df_test_cxp.columns)}")
                     
-                    # Buscar columnas exactas
                     ref_col = None
                     amt_col = None
                     arancel_col = None
@@ -1311,4 +1138,46 @@ def process_cxp_file(df_processed, cxp_file):
                     
                     if ref_col and amt_col:
                         st.success(f"✅ CXP: Columnas encontradas en '{sheet_name}', fila {header_row}")
-                        st.info(f"Ref='{ref
+                        st.info(f"Ref='{ref_col}', Amt='{amt_col}', Arancel='{arancel_col}', IVA='{iva_col}'")
+                        
+                        df_cxp = pd.DataFrame()
+                        df_cxp['asignacion_cxp'] = df_test_cxp[ref_col].astype(str).str.strip()
+                        df_cxp['amt_due_cxp'] = pd.to_numeric(df_test_cxp[amt_col], errors='coerce').fillna(0.0)
+                        
+                        if arancel_col:
+                            df_cxp['arancel_cxp'] = pd.to_numeric(df_test_cxp[arancel_col], errors='coerce').fillna(0.0)
+                        else:
+                            df_cxp['arancel_cxp'] = 0.0
+                            
+                        if iva_col:
+                            df_cxp['iva_cxp'] = pd.to_numeric(df_test_cxp[iva_col], errors='coerce').fillna(0.0)
+                        else:
+                            df_cxp['iva_cxp'] = 0.0
+                        
+                        break
+                        
+                except Exception as e:
+                    continue
+                    
+            if df_cxp is not None:
+                break
+        
+        if df_cxp is not None:
+            df_processed = df_processed.merge(
+                df_cxp,
+                left_on='asignacion',
+                right_on='asignacion_cxp',
+                how='left'
+            )
+            
+            df_processed = df_processed.drop(columns=['asignacion_cxp'])
+            
+            for col in ['amt_due_cxp', 'arancel_cxp', 'iva_cxp']:
+                df_processed[col] = df_processed[col].fillna(0.0)
+            
+            matches = df_processed['amt_due_cxp'].gt(0).sum()
+            st.success(f"✅ Chile Express (CXP) procesado: {matches} coincidencias encontradas")
+            
+        else:
+            st.warning("⚠️ No se pudieron detectar las columnas esperadas en el archivo CXP")
+            for col in ['amt_due_cxp', 'arancel_cxp', 'iva_cxp
