@@ -752,6 +752,8 @@ elif page == "📁 Procesar Archivos":
                                             df_cxp = df_test_cxp[[ref_col, amt_col]].copy()
                                             df_cxp = df_cxp.rename(columns={ref_col: 'Asignacion_cxp', amt_col: 'Amt_Due_CXP'})
                                             
+                                            # Asegurar que las columnas del CXP son numéricas antes del merge
+                                            df_cxp['Amt_Due_CXP'] = pd.to_numeric(df_cxp['Amt_Due_CXP'], errors='coerce').fillna(0)
                                             if arancel_col: df_cxp['Arancel_CXP_Merge'] = pd.to_numeric(df_test_cxp[arancel_col], errors='coerce').fillna(0)
                                             if iva_col: df_cxp['IVA_CXP_Merge'] = pd.to_numeric(df_test_cxp[iva_col], errors='coerce').fillna(0)
                                             
@@ -765,7 +767,6 @@ elif page == "📁 Procesar Archivos":
                             
                             if df_cxp is not None:
                                 df_cxp['Asignacion_cxp'] = df_cxp['Asignacion_cxp'].astype(str).str.strip()
-                                df_cxp['Amt_Due_CXP'] = pd.to_numeric(df_cxp['Amt_Due_CXP'], errors='coerce').fillna(0)
                                 
                                 # Unir con el DataFrame principal
                                 df_processed = df_processed.merge(
@@ -775,6 +776,7 @@ elif page == "📁 Procesar Archivos":
                                     right_on='Asignacion_cxp',
                                     how='left'
                                 )
+                                # Fill NaNs for merged columns. These were already handled in df_cxp, but for non-matches they will be NaN.
                                 df_processed['Amt_Due_CXP'] = df_processed['Amt_Due_CXP'].fillna(0)
                                 df_processed['Arancel_CXP'] = df_processed['Arancel_CXP'].fillna(0)
                                 df_processed['IVA_CXP'] = df_processed['IVA_CXP'].fillna(0)
@@ -796,8 +798,7 @@ elif page == "📁 Procesar Archivos":
                     # --- RE-CALCULAR CAMPOS ESPECÍFICOS Y UTILIDADES DESPUÉS DE MERGES ---
                     # Ahora que todos los datos están fusionados, aplicar los cálculos finales
 
-                    # FIX: Asegurar que logistic_weight_lbs y quantity sean numéricos y no NaN
-                    # antes de usarlos en la operación de Peso_kg.
+                    # Asegurar que logistic_weight_lbs y quantity sean numéricos y no NaN
                     df_processed['logistic_weight_lbs'] = pd.to_numeric(df_processed['logistic_weight_lbs'], errors='coerce').fillna(0)
                     df_processed['quantity'] = pd.to_numeric(df_processed['quantity'], errors='coerce').fillna(1) # quantity defaults to 1 if missing for multiplication
 
@@ -805,24 +806,26 @@ elif page == "📁 Procesar Archivos":
                     df_processed['Socio_cuenta'] = df_processed['order_status_meli'].apply(lambda x: 0 if str(x).lower() == 'refunded' else 1)
                     df_processed['Impuesto por facturacion'] = df_processed['order_status_meli'].apply(lambda x: 1 if str(x).lower() in ['approved', 'in mediation'] else 0)
                     
-                    # Cálculo de Peso_kg sin .fillna en el apply, ya que se manejó antes
                     df_processed['Peso_kg'] = (df_processed['logistic_weight_lbs'] * df_processed['quantity']) * 0.453592
                     df_processed['Gss Logistica'] = df_processed['Peso_kg'].apply(obtener_gss_logistica)
 
                     # Final calcular Utilidad Gss y Utilidad Socio (separamos la lógica por tipo de cálculo)
                     def apply_final_profit_calculation(row):
                         tipo = row['tipo_calculo']
-                        meli_usd = row['MELI USD']
-                        costo_amazon = row['Costo Amazon']
-                        total_anican = row['Total_Anican']
-                        aditional = row['Aditional']
-                        costo_cxp = row['Costo cxp']
-                        bodegal = row['Bodegal']
-                        socio_cuenta = row['Socio_cuenta']
-                        impuesto_facturacion = row['Impuesto por facturacion']
-                        gss_logistica = row['Gss Logistica']
-                        impuesto_gss = row['Impuesto Gss']
-                        amt_due_cxp = row['Amt_Due_CXP'] # Equivalente a Costo cxp para D
+                        # Usar .get() para acceder a las columnas y proporcionar un valor por defecto de 0.0
+                        # Esto previene KeyErrors si por alguna razón una columna no está presente
+                        # aunque se haya inicializado.
+                        meli_usd = row.get('MELI USD', 0.0)
+                        costo_amazon = row.get('Costo Amazon', 0.0)
+                        total_anican = row.get('Total_Anican', 0.0)
+                        aditional = row.get('Aditional', 0.0)
+                        costo_cxp = row.get('Costo cxp', 0.0)
+                        bodegal = row.get('Bodegal', 0.0)
+                        socio_cuenta = row.get('Socio_cuenta', 0.0)
+                        impuesto_facturacion = row.get('Impuesto por facturacion', 0.0)
+                        gss_logistica = row.get('Gss Logistica', 0.0)
+                        impuesto_gss = row.get('Impuesto Gss', 0.0)
+                        amt_due_cxp = row.get('Amt_Due_CXP', 0.0) # Equivalente a Costo cxp para D
 
                         utilidad_gss_final = 0.0
                         utilidad_socio_final = 0.0
