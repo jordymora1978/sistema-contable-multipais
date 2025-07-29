@@ -108,9 +108,8 @@ def test_connection():
         supabase = init_supabase()
         if supabase:
             # Intenta una consulta simple a una tabla que se espera que exista, como 'store_config'
-            # O incluso una tabla dummy para solo probar la conexión.
-            # Puedes ajustar 'store_config' a una tabla que sepas que existe.
-            result = supabase.table('trm_rates').select('count').execute() # O cualquier otra tabla pequeña
+            # O cualquier otra tabla pequeña que siempre esté disponible.
+            result = supabase.table('trm_rates').select('count').execute() 
             return True, "✅ Conectado a Supabase"
         return False, "❌ No se pudo inicializar Supabase"
     except Exception as e:
@@ -1023,60 +1022,6 @@ elif page == "📋 Fórmulas de Negocio":
         <h5>🔧 Componentes:</h5>
         • <strong>Costo cxp:</strong> Amt. Due (del archivo Chile Express CXP)<br>
         • <strong>Bodegal:</strong> 3.5 si logistic_type = "xd_drop_off", sino 0<br>
-        • <strong>Socio_cuenta:</strong> 0 si order_status_meli = "refunded", sino 1<br>
-        • <strong>Asignacion:</strong> prefijo + Serial# para unir con CXP<br><br>
-        
-        <h5>🌍 Países aplicables:</h5>
-        • Chile (MEGATIENDA SPA)<br>
-        • Colombia (VEENDELO)
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with tab3:
-        st.markdown("### Tipo C: DETODOPARATODOS, COMPRAFACIL, COMPRA-YA")
-        st.markdown("""
-        <div class="formula-box">
-        <h4>📐 Fórmula Principal</h4>
-        <strong>Utilidad Gss = MELI USD - Costo Amazon - Total - Aditional - Impuesto por facturación</strong><br><br>
-        
-        <h5>� Lógica Especial:</h5>
-        • <strong>Impuesto por facturación:</strong> 1 si order_status_meli = "approved" o "in mediation", sino 0<br>
-        • <strong>Utilidad Socio:</strong> 7.5 si Utilidad > 7.5, sino Utilidad<br>
-        • <strong>Si Utilidad > 7.5:</strong> Utilidad Gss = Utilidad - Utilidad Socio<br>
-        • <strong>Si Utilidad ≤ 7.5:</strong> Utilidad Gss = 0<br><br>
-        
-        <h5>🌍 Países aplicables:</h5>
-        • Colombia (todas las tiendas tipo C)
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with tab4:
-        st.markdown("### Tipo D: FABORCARGO")
-        st.markdown("""
-        <div class="formula-box">
-        <h4>📐 Fórmula Principal</h4>
-        <strong>Utilidad Gss = Gss Logística + Impuesto Gss - Amt. Due</strong><br><br>
-        
-        <h5>🔧 Componentes:</h5>
-        • <strong>Peso:</strong> logistic_weight_lbs × quantity × 0.453592 (conversión a kg)<br>
-        • <strong>Gss Logística:</strong> según tabla ANEXO A por peso en kg<br>
-        • <strong>Impuesto Gss:</strong> Arancel + IVA (del archivo CXP)<br>
-        • <strong>Bodegal:</strong> 3.5 si logistic_type = "xd_drop_off", sino 0<br><br>
-        
-        <h5>🌍 Países aplicables:</h5>
-        • Colombia (FABORCARGO)
-        </div>
-        """, unsafe_allow_html=True)
-
-# ============================
-# FOOTER
-# ============================
-
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666; padding: 1rem;'>
-    <p><strong>Sistema Contable Multi-País v3.0</strong> | Powered by Streamlit + Supabase</p>
-    <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
+        • <strong>Socio_cuenta:</strong> 0 si order_status_meli = "refunded", sino 1<        <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
 </div>
 """, unsafe_allow_html=True)
-�
