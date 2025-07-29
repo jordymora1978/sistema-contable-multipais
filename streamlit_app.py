@@ -225,8 +225,8 @@ def save_orders_to_supabase(df_processed_for_save):
             order_dict = {
                 'order_id': str(row.get('order_id', '')),
                 'account_name': str(row.get('account_name', '')),
-                'serial_number': str(row.get('serial_number', '')), # Ahora se espera 'serial_number' del df agregado
-                'asignacion': str(row.get('asignacion', '')), # Ahora se espera 'asignacion' del df agregado
+                'serial_number': str(row.get('serial_number', '')),
+                'asignacion': str(row.get('asignacion', '')),
                 'pais': str(row.get('pais', '')),
                 'tipo_calculo': str(row.get('tipo_calculo', '')),
                 'moneda': str(row.get('moneda', '')),
@@ -299,6 +299,14 @@ def get_orders_from_supabase(limit=1000):
 # FUNCIONES DE NEGOCIO
 # ============================
 
+# Función auxiliar para normalizar nombres de columnas a snake_case
+def to_snake_case(name):
+    name = re.sub(r'[^a-zA-Z0-9_]', '', name) # Eliminar caracteres no deseados
+    name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
+    name = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', name)
+    return name.lower().replace(' ', '_').replace('.', '').replace('#', '').replace('-', '_')
+
+
 def calcular_asignacion(account_name, serial_number, store_config):
     """Calcula la columna Asignacion"""
     if pd.isna(account_name) or pd.isna(serial_number):
@@ -316,14 +324,15 @@ def obtener_gss_logistica(peso_kg):
     ANEXO_A = [
         (0.01, 0.50, 24.01), (0.51, 1.00, 33.09), (1.01, 1.50, 42.17), (1.51, 2.00, 51.25),
         (2.01, 2.50, 61.94), (2.51, 3.00, 71.02), (3.01, 3.50, 80.91), (3.51, 4.00, 89.99),
-        (4.01, 4.50, 99.87), (4.51, 5.00, 108.95), (5.01, 5.50, 117.19), (5.51, 6.00, 126.12),
-        (6.01, 6.50, 135.85), (6.51, 7.00, 144.78), (7.01, 7.50, 154.52), (7.51, 8.00, 163.75),
-        (8.01, 8.50, 173.18), (8.51, 9.00, 182.11), (9.01, 9.50, 191.85), (9.51, 10.00, 200.78),
-        (10.01, 10.50, 207.36), (10.51, 11.00, 216.14), (11.01, 11.50, 225.73), (11.51, 12.00, 234.51),
-        (12.01, 12.50, 244.09), (12.51, 13.00, 252.87), (13.01, 13.50, 262.46), (13.51, 14.00, 271.24),
-        (14.01, 14.50, 280.82), (14.51, 15.00, 289.60), (15.01, 15.50, 294.54), (15.51, 16.00, 303.17),
-        (16.01, 16.50, 312.60), (16.51, 17.00, 321.23), (17.01, 17.50, 330.67), (17.51, 18.00, 339.30),
-        (18.01, 18.50, 348.73), (18.51, 19.00, 357.36), (19.01, 19.50, 366.80), (19.51, 20.00, 373.72)
+        (4.01, 4.50, 99.87), (4.51, 5.00, 99.87), (5.01, 5.50, 108.95), (5.51, 6.00, 117.19), # Added value for 4.51 to 5.00
+        (6.01, 6.50, 126.12), (6.51, 7.00, 135.85), (7.01, 7.50, 144.78), (7.51, 8.00, 154.52),
+        (8.01, 8.50, 163.75), (8.51, 9.00, 173.18), (9.01, 9.50, 182.11), (9.51, 10.00, 191.85),
+        (10.01, 10.50, 200.78), (10.51, 11.00, 207.36), (11.01, 11.50, 216.14), (11.51, 12.00, 225.73),
+        (12.01, 12.50, 234.51), (12.51, 13.00, 244.09), (13.01, 13.50, 252.87), (13.51, 14.00, 262.46),
+        (14.01, 14.50, 271.24), (14.51, 15.00, 280.82), (15.01, 15.50, 289.60), (15.51, 16.00, 294.54),
+        (16.01, 16.50, 303.17), (16.51, 17.00, 312.60), (17.01, 17.50, 321.23), (17.51, 18.00, 330.67),
+        (18.01, 18.50, 339.30), (18.51, 19.00, 348.73), (19.01, 19.50, 357.36), (19.51, 20.00, 366.80),
+        (20.01, float('inf'), 373.72) # Added a catch-all for >20kg
     ]
     
     if pd.isna(peso_kg) or peso_kg <= 0:
@@ -333,26 +342,30 @@ def obtener_gss_logistica(peso_kg):
         if desde <= peso_kg <= hasta:
             return gss_value
     
-    return ANEXO_A[-1][2] # Último valor si excede el rango
+    return 0 # Fallback in case of unexpected peso_kg
 
 
 def calcular_utilidades(df, store_config, trm_data):
     """Calcula utilidades según tipo de tienda.
        Asume que df es el DataFrame de Drapify pre-procesado."""
     
-    # Asegurar que las columnas de referencia sean strings
-    df['Serial#'] = df.get('Serial#', pd.Series(dtype=str)).astype(str)
+    # Normalizar nombres de columnas del DF principal a snake_case
+    df.columns = [to_snake_case(col) for col in df.columns]
+
+    # Asegurar que las columnas de referencia sean strings y existan
+    df['serial'] = df.get('serial', pd.Series(dtype=str)).astype(str)
     df['order_id'] = df.get('order_id', pd.Series(dtype=str)).astype(str)
+    df['account_name'] = df.get('account_name', pd.Series(dtype=str)).astype(str)
     
-    # Calcular columna Asignacion
-    df['Asignacion'] = df.apply(
-        lambda row: calcular_asignacion(row['account_name'], row.get('Serial#', ''), store_config),
+    # Calcular columna asignacion
+    df['asignacion'] = df.apply(
+        lambda row: calcular_asignacion(row['account_name'], row.get('serial', ''), store_config),
         axis=1
     )
     
     # Mapear país y tipo de cálculo
     df['pais'] = df['account_name'].map(
-        lambda x: store_config.get(str(x), {}).get('pais', 'Desconocido')
+        lambda x: store_config.get(str(x), {}).get('pais', 'desconocido')
     )
     df['tipo_calculo'] = df['account_name'].map(
         lambda x: store_config.get(str(x), {}).get('tipo_calculo', 'A')
@@ -362,19 +375,20 @@ def calcular_utilidades(df, store_config, trm_data):
     pais_moneda = {'Colombia': 'COP', 'Perú': 'PEN', 'Peru': 'PEN', 'Chile': 'CLP'}
     df['moneda'] = df['pais'].map(pais_moneda)
     
-    # Calcular MELI USD
-    df['MELI USD'] = df.apply(
-        lambda row: (row['net_real_amount'] / trm_data.get(row['moneda'], 1))
-        if pd.notna(row['net_real_amount']) and row['moneda'] in trm_data else 0,
+    # Calcular meli_usd
+    df['meli_usd'] = df.apply(
+        lambda row: (row.get('net_real_amount', 0.0) / trm_data.get(row.get('moneda', ''), 1.0))
+        if pd.notna(row.get('net_real_amount')) and row.get('moneda') in trm_data else 0.0,
         axis=1
     )
     
     # Inicializar columnas que pueden venir de merges o cálculos específicos
     # y asegurar su tipo numérico para operaciones posteriores
     cols_to_init_float = [
-        'Aditional', 'Bodegal', 'Socio_cuenta', 'Impuesto por facturacion', 
-        'Gss Logistica', 'Impuesto Gss', 'Utilidad Gss', 'Utilidad Socio',
-        'Total_Anican', 'Costo cxp', 'Amt_Due_CXP', 'Arancel_CXP', 'IVA_CXP', 'Peso_kg'
+        'aditional', 'bodegal', 'socio_cuenta', 'impuesto_facturacion', 
+        'gss_logistica', 'impuesto_gss', 'utilidad_gss', 'utilidad_socio',
+        'total_anican', 'costo_cxp', 'amt_due_cxp', 'arancel_cxp', 'iva_cxp', 'peso_kg',
+        'costo_amazon' # Añadir costo_amazon aquí para inicialización
     ]
     for col in cols_to_init_float:
         if col not in df.columns: # Solo inicializar si no existen
@@ -383,12 +397,11 @@ def calcular_utilidades(df, store_config, trm_data):
             # Asegurar que la columna es numérica y rellenar NaN si existen
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
 
-    # Convertir 'Declare Value' y 'quantity' a numérico al inicio de la función
-    # para evitar el error 'float' object has no attribute 'fillna'
-    df['Declare Value'] = pd.to_numeric(df['Declare Value'], errors='coerce').fillna(0)
-    df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(1) # quantity defaults to 1 if missing for multiplication
+    # Convertir 'declare_value' y 'quantity' a numérico al inicio de la función
+    df['declare_value'] = pd.to_numeric(df.get('declare_value', 0), errors='coerce').fillna(0.0)
+    df['quantity'] = pd.to_numeric(df.get('quantity', 1), errors='coerce').fillna(1.0) # quantity defaults to 1 if missing for multiplication
 
-    df['Costo Amazon'] = df['Declare Value'] * df['quantity']
+    df['costo_amazon'] = df['declare_value'] * df['quantity']
 
     # El resto de los cálculos específicos por tipo se harán en el loop principal
     # después de que todos los archivos (Anican, Aditionals, CXP) hayan sido fusionados.
@@ -650,7 +663,7 @@ elif page == "📁 Procesar Archivos":
                     # 1. PROCESAR ARCHIVO DRAPIFY
                     df_drapify = pd.read_excel(drapify_file)
 
-                    # Verificar columnas requeridas en DRAPIFY
+                    # Verificar columnas requeridas en DRAPIFY (usando nombres originales, luego se normalizan)
                     columnas_requeridas_drapify = [
                         'System#', 'Serial#', 'order_id', 'account_name',
                         'date_created', 'quantity', 'logistic_type',
@@ -671,63 +684,75 @@ elif page == "📁 Procesar Archivos":
                         st.stop() 
                     
                     # Inicializar el DataFrame base con las columnas de Drapify y las comunes calculadas
+                    # Los nombres de columnas se normalizan dentro de calcular_utilidades
                     df_processed = calcular_utilidades(df_drapify.copy(), st.session_state.store_config, st.session_state.trm_data)
+
+                    st.write("DEBUG: Columnas de df_processed después de calcular_utilidades:", df_processed.columns.tolist())
+
 
                     # 2. PROCESAR ARCHIVO ANICAN LOGISTICS (si existe)
                     if anican_file:
                         try:
                             df_anican = pd.read_excel(anican_file)
-                            required_anican_cols = ['Reference', 'Total']
+                            df_anican.columns = [to_snake_case(col) for col in df_anican.columns] # Normalizar nombres
+                            required_anican_cols = ['reference', 'total'] # Ahora snake_case
                             
                             if all(col in df_anican.columns for col in required_anican_cols):
-                                df_anican['Reference'] = df_anican['Reference'].astype(str)
+                                df_anican['reference'] = df_anican['reference'].astype(str)
                                 df_processed = df_processed.merge(
-                                    df_anican[['Reference', 'Total']].rename(
-                                        columns={'Reference': 'order_id', 'Total': 'Total_Anican_Merge'}),
+                                    df_anican[['reference', 'total']].rename(
+                                        columns={'reference': 'order_id', 'total': 'total_anican_merge'}), # snake_case
                                     on='order_id',
                                     how='left'
                                 )
-                                df_processed['Total_Anican'] = df_processed['Total_Anican_Merge'].fillna(0)
-                                if 'Total_Anican_Merge' in df_processed.columns:
-                                    df_processed = df_processed.drop(columns=['Total_Anican_Merge'])
-                                st.success(f"✅ Anican Logistics procesado: {df_processed['Total_Anican'].gt(0).sum()} coincidencias.")
+                                df_processed['total_anican'] = df_processed['total_anican_merge'].fillna(0)
+                                if 'total_anican_merge' in df_processed.columns:
+                                    df_processed = df_processed.drop(columns=['total_anican_merge'])
+                                st.success(f"✅ Anican Logistics procesado: {df_processed['total_anican'].gt(0).sum()} coincidencias.")
                             else:
                                 st.warning("⚠️ Archivo Anican Logistics no tiene las columnas esperadas ('Reference', 'Total').")
                         except Exception as e:
                             st.error(f"❌ Error procesando Anican Logistics: {str(e)}")
+                            st.exception(e)
                     else:
                         st.info("ℹ️ Archivo Anican Logistics no cargado. Se omitirá su procesamiento.")
+
+                    st.write("DEBUG: Columnas de df_processed después de Anican Logistics:", df_processed.columns.tolist())
 
                     # 3. PROCESAR ARCHIVO ANICAN ADITIONALS (si existe)
                     if aditionals_file:
                         try:
                             df_aditionals = pd.read_excel(aditionals_file)
-                            required_aditionals_cols = ['Order Id', 'Quantity', 'UnitPrice']
+                            df_aditionals.columns = [to_snake_case(col) for col in df_aditionals.columns] # Normalizar nombres
+                            required_aditionals_cols = ['order_id', 'quantity', 'unit_price'] # Ahora snake_case
                             
                             if all(col in df_aditionals.columns for col in required_aditionals_cols):
-                                df_aditionals['Aditional_calc_temp'] = df_aditionals['Quantity'].fillna(0) * df_aditionals['UnitPrice'].fillna(0)
-                                aditionals_grouped = df_aditionals.groupby('Order Id')['Aditional_calc_temp'].sum().reset_index()
+                                df_aditionals['aditional_calc_temp'] = df_aditionals['quantity'].fillna(0) * df_aditionals['unit_price'].fillna(0)
+                                aditionals_grouped = df_aditionals.groupby('order_id')['aditional_calc_temp'].sum().reset_index()
                                 
                                 # Renombrar para el merge
                                 aditionals_grouped = aditionals_grouped.rename(
-                                    columns={'Order Id': 'order_id', 'Aditional_calc_temp': 'Aditional_Merge'})
+                                    columns={'aditional_calc_temp': 'aditional_merge'}) # snake_case
                                 aditionals_grouped['order_id'] = aditionals_grouped['order_id'].astype(str)
 
                                 df_processed = df_processed.merge(
-                                    aditionals_grouped[['order_id', 'Aditional_Merge']],
+                                    aditionals_grouped[['order_id', 'aditional_merge']],
                                     on='order_id',
                                     how='left'
                                 )
-                                df_processed['Aditional'] = df_processed['Aditional_Merge'].fillna(0)
-                                if 'Aditional_Merge' in df_processed.columns:
-                                    df_processed = df_processed.drop(columns=['Aditional_Merge'])
-                                st.success(f"✅ Anican Aditionals procesado: {df_processed['Aditional'].gt(0).sum()} coincidencias.")
+                                df_processed['aditional'] = df_processed['aditional_merge'].fillna(0)
+                                if 'aditional_merge' in df_processed.columns:
+                                    df_processed = df_processed.drop(columns=['aditional_merge'])
+                                st.success(f"✅ Anican Aditionals procesado: {df_processed['aditional'].gt(0).sum()} coincidencias.")
                             else:
                                 st.warning("⚠️ Archivo Anican Aditionals no tiene las columnas esperadas ('Order Id', 'Quantity', 'UnitPrice').")
                         except Exception as e:
                             st.error(f"❌ Error procesando Anican Aditionals: {str(e)}")
+                            st.exception(e)
                     else:
                         st.info("ℹ️ Archivo Anican Aditionals no cargado. Se omitirá su procesamiento.")
+                    
+                    st.write("DEBUG: Columnas de df_processed después de Anican Aditionals:", df_processed.columns.tolist())
 
                     # 4. PROCESAR ARCHIVO CXP (si existe)
                     if cxp_file:
@@ -740,22 +765,22 @@ elif page == "📁 Procesar Archivos":
                                 for header_row in range(5): # Probar encabezados en las primeras 5 filas (0-4)
                                     try:
                                         df_test_cxp = pd.read_excel(cxp_file, sheet_name=sheet_name, header=header_row)
-                                        df_test_cxp.columns = [str(col).strip() for col in df_test_cxp.columns] # Limpiar nombres de columna
+                                        df_test_cxp.columns = [to_snake_case(col) for col in df_test_cxp.columns] # Normalizar nombres
                                         
-                                        # Buscar columnas por patrones flexibles
-                                        ref_col = next((col for col in df_test_cxp.columns if re.search(r'Ref\s*#', col, re.IGNORECASE)), None)
-                                        amt_col = next((col for col in df_test_cxp.columns if re.search(r'Amt\.\s*Due', col, re.IGNORECASE)), None)
-                                        arancel_col = next((col for col in df_test_cxp.columns if re.search(r'Arancel', col, re.IGNORECASE)), None)
-                                        iva_col = next((col for col in df_test_cxp.columns if re.search(r'IVA', col, re.IGNORECASE)), None)
+                                        # Buscar columnas por patrones flexibles (ahora ya son snake_case)
+                                        ref_col = next((col for col in df_test_cxp.columns if 'ref' in col), None)
+                                        amt_col = next((col for col in df_test_cxp.columns if 'amt_due' in col), None)
+                                        arancel_col = next((col for col in df_test_cxp.columns if 'arancel' in col), None)
+                                        iva_col = next((col for col in df_test_cxp.columns if 'iva' in col), None)
 
                                         if ref_col and amt_col:
                                             df_cxp = df_test_cxp[[ref_col, amt_col]].copy()
-                                            df_cxp = df_cxp.rename(columns={ref_col: 'Asignacion_cxp', amt_col: 'Amt_Due_CXP'})
+                                            df_cxp = df_cxp.rename(columns={ref_col: 'asignacion_cxp', amt_col: 'amt_due_cxp'})
                                             
                                             # Asegurar que las columnas del CXP son numéricas antes del merge
-                                            df_cxp['Amt_Due_CXP'] = pd.to_numeric(df_cxp['Amt_Due_CXP'], errors='coerce').fillna(0)
-                                            if arancel_col: df_cxp['Arancel_CXP_Merge'] = pd.to_numeric(df_test_cxp[arancel_col], errors='coerce').fillna(0)
-                                            if iva_col: df_cxp['IVA_CXP_Merge'] = pd.to_numeric(df_test_cxp[iva_col], errors='coerce').fillna(0)
+                                            df_cxp['amt_due_cxp'] = pd.to_numeric(df_cxp['amt_due_cxp'], errors='coerce').fillna(0)
+                                            if arancel_col: df_cxp['arancel_cxp_merge'] = pd.to_numeric(df_test_cxp[arancel_col], errors='coerce').fillna(0)
+                                            if iva_col: df_cxp['iva_cxp_merge'] = pd.to_numeric(df_test_cxp[iva_col], errors='coerce').fillna(0)
                                             
                                             st.info(f"✅ CXP: Encabezado detectado en hoja '{sheet_name}', fila {header_row}. Columnas: {list(df_cxp.columns)}")
                                             break # Salir de loop de headers si encontramos
@@ -766,87 +791,90 @@ elif page == "📁 Procesar Archivos":
                                     break # Salir de loop de hojas si encontramos
                             
                             if df_cxp is not None:
-                                df_cxp['Asignacion_cxp'] = df_cxp['Asignacion_cxp'].astype(str).str.strip()
+                                df_cxp['asignacion_cxp'] = df_cxp['asignacion_cxp'].astype(str).str.strip()
                                 
                                 # Unir con el DataFrame principal
                                 df_processed = df_processed.merge(
-                                    df_cxp[['Asignacion_cxp', 'Amt_Due_CXP', 'Arancel_CXP_Merge', 'IVA_CXP_Merge']].rename(
-                                        columns={'Arancel_CXP_Merge': 'Arancel_CXP', 'IVA_CXP_Merge': 'IVA_CXP'}),
-                                    left_on='Asignacion',
-                                    right_on='Asignacion_cxp',
+                                    df_cxp[['asignacion_cxp', 'amt_due_cxp', 'arancel_cxp_merge', 'iva_cxp_merge']].rename(
+                                        columns={'arancel_cxp_merge': 'arancel_cxp', 'iva_cxp_merge': 'iva_cxp'}), # snake_case
+                                    left_on='asignacion', # Originalmente 'Asignacion' ahora 'asignacion'
+                                    right_on='asignacion_cxp',
                                     how='left'
                                 )
                                 # Fill NaNs for merged columns. These were already handled in df_cxp, but for non-matches they will be NaN.
-                                df_processed['Amt_Due_CXP'] = df_processed['Amt_Due_CXP'].fillna(0)
-                                df_processed['Arancel_CXP'] = df_processed['Arancel_CXP'].fillna(0)
-                                df_processed['IVA_CXP'] = df_processed['IVA_CXP'].fillna(0)
-                                df_processed['Costo cxp'] = df_processed['Amt_Due_CXP'] # Según la fórmula
-                                df_processed['Impuesto Gss'] = df_processed['Arancel_CXP'] + df_processed['IVA_CXP'] # Según la fórmula
+                                df_processed['amt_due_cxp'] = df_processed['amt_due_cxp'].fillna(0.0)
+                                df_processed['arancel_cxp'] = df_processed['arancel_cxp'].fillna(0.0)
+                                df_processed['iva_cxp'] = df_processed['iva_cxp'].fillna(0.0)
+                                df_processed['costo_cxp'] = df_processed['amt_due_cxp'] # Según la fórmula
+                                df_processed['impuesto_gss'] = df_processed['arancel_cxp'] + df_processed['iva_cxp'] # Según la fórmula
 
                                 # Limpiar columnas temporales del merge
-                                if 'Asignacion_cxp' in df_processed.columns:
-                                    df_processed = df_processed.drop(columns=['Asignacion_cxp'])
+                                if 'asignacion_cxp' in df_processed.columns:
+                                    df_processed = df_processed.drop(columns=['asignacion_cxp'])
 
-                                st.success(f"✅ Chile Express (CXP) procesado exitosamente. {df_processed['Amt_Due_CXP'].gt(0).sum()} coincidencias.")
+                                st.success(f"✅ Chile Express (CXP) procesado exitosamente. {df_processed['amt_due_cxp'].gt(0).sum()} coincidencias.")
                             else:
                                 st.warning("⚠️ No se pudo encontrar las columnas 'Ref #' y 'Amt. Due' en el archivo CXP.")
                         except Exception as e:
                             st.error(f"❌ Error procesando Chile Express (CXP): {str(e)}")
+                            st.exception(e)
                     else:
                         st.info("ℹ️ Archivo Chile Express (CXP) no cargado. Se omitirá su procesamiento.")
+
+                    st.write("DEBUG: Columnas de df_processed después de CXP:", df_processed.columns.tolist())
+
 
                     # --- RE-CALCULAR CAMPOS ESPECÍFICOS Y UTILIDADES DESPUÉS DE MERGES ---
                     # Ahora que todos los datos están fusionados, aplicar los cálculos finales
 
                     # Asegurar que logistic_weight_lbs y quantity sean numéricos y no NaN
-                    df_processed['logistic_weight_lbs'] = pd.to_numeric(df_processed['logistic_weight_lbs'], errors='coerce').fillna(0)
-                    df_processed['quantity'] = pd.to_numeric(df_processed['quantity'], errors='coerce').fillna(1) # quantity defaults to 1 if missing for multiplication
+                    df_processed['logistic_weight_lbs'] = pd.to_numeric(df_processed.get('logistic_weight_lbs', 0), errors='coerce').fillna(0.0)
+                    df_processed['quantity'] = pd.to_numeric(df_processed.get('quantity', 1), errors='coerce').fillna(1.0) # quantity defaults to 1 if missing for multiplication
 
-                    df_processed['Bodegal'] = df_processed['logistic_type'].apply(lambda x: 3.5 if str(x).lower() == 'xd_drop_off' else 0)
-                    df_processed['Socio_cuenta'] = df_processed['order_status_meli'].apply(lambda x: 0 if str(x).lower() == 'refunded' else 1)
-                    df_processed['Impuesto por facturacion'] = df_processed['order_status_meli'].apply(lambda x: 1 if str(x).lower() in ['approved', 'in mediation'] else 0)
+                    df_processed['bodegal'] = df_processed['logistic_type'].apply(lambda x: 3.5 if str(x).lower() == 'xd_drop_off' else 0.0)
+                    df_processed['socio_cuenta'] = df_processed['order_status_meli'].apply(lambda x: 0.0 if str(x).lower() == 'refunded' else 1.0)
+                    df_processed['impuesto_facturacion'] = df_processed['order_status_meli'].apply(lambda x: 1.0 if str(x).lower() in ['approved', 'in mediation'] else 0.0)
                     
-                    df_processed['Peso_kg'] = (df_processed['logistic_weight_lbs'] * df_processed['quantity']) * 0.453592
-                    df_processed['Gss Logistica'] = df_processed['Peso_kg'].apply(obtener_gss_logistica)
+                    df_processed['peso_kg'] = (df_processed['logistic_weight_lbs'] * df_processed['quantity']) * 0.453592
+                    df_processed['gss_logistica'] = df_processed['peso_kg'].apply(obtener_gss_logistica)
 
                     # Final calcular Utilidad Gss y Utilidad Socio (separamos la lógica por tipo de cálculo)
                     def apply_final_profit_calculation(row):
-                        tipo = row.get('tipo_calculo', 'A') # Asegurar que tipo_calculo también se acceda con .get()
-                        # Usar .get() para acceder a las columnas y proporcionar un valor por defecto de 0.0
-                        # Esto previene KeyErrors si por alguna razón una columna no está presente
-                        meli_usd = row.get('MELI USD', 0.0)
-                        costo_amazon = row.get('Costo Amazon', 0.0)
-                        total_anican = row.get('Total_Anican', 0.0)
-                        aditional = row.get('Aditional', 0.0)
-                        costo_cxp = row.get('Costo cxp', 0.0)
-                        bodegal = row.get('Bodegal', 0.0)
-                        socio_cuenta = row.get('Socio_cuenta', 0.0)
-                        impuesto_facturacion = row.get('Impuesto por facturacion', 0.0)
-                        gss_logistica = row.get('Gss Logistica', 0.0)
-                        impuesto_gss = row.get('Impuesto Gss', 0.0)
-                        amt_due_cxp = row.get('Amt_Due_CXP', 0.0) # Equivalente a Costo cxp para D
+                        tipo = row.get('tipo_calculo', 'A') 
+                        
+                        meli_usd = row.get('meli_usd', 0.0)
+                        costo_amazon = row.get('costo_amazon', 0.0)
+                        total_anican = row.get('total_anican', 0.0)
+                        aditional = row.get('aditional', 0.0)
+                        costo_cxp = row.get('costo_cxp', 0.0)
+                        bodegal = row.get('bodegal', 0.0)
+                        socio_cuenta = row.get('socio_cuenta', 0.0)
+                        impuesto_facturacion = row.get('impuesto_facturacion', 0.0)
+                        gss_logistica = row.get('gss_logistica', 0.0)
+                        impuesto_gss = row.get('impuesto_gss', 0.0)
+                        amt_due_cxp = row.get('amt_due_cxp', 0.0) 
 
                         utilidad_gss_final = 0.0
                         utilidad_socio_final = 0.0
 
-                        if tipo == 'A': # TODOENCARGO-CO, MEGA TIENDAS PERUANAS
+                        if tipo == 'A': 
                             utilidad_gss_final = meli_usd - costo_amazon - total_anican - aditional
-                        elif tipo == 'B': # MEGATIENDA SPA, VEENDELO
+                        elif tipo == 'B': 
                             utilidad_gss_final = meli_usd - costo_cxp - costo_amazon - bodegal - socio_cuenta
-                        elif tipo == 'C': # DETODOPARATODOS, COMPRAFACIL, COMPRA-YA
+                        elif tipo == 'C': 
                             utilidad_base_c = meli_usd - costo_amazon - total_anican - aditional - impuesto_facturacion
                             if utilidad_base_c > 7.5:
                                 utilidad_socio_final = 7.5
-                                utilidad_gss_final = utilidad_base_c - utilidad_socio_final
+                                utilidad_gss_final = utilidad_base_c - 7.5 # Utilidad - Utilidad Socio
                             else:
                                 utilidad_socio_final = utilidad_base_c
-                                utilidad_gss_final = 0
-                        elif tipo == 'D': # FABORCARGO
+                                utilidad_gss_final = 0.0
+                        elif tipo == 'D': 
                             utilidad_gss_final = gss_logistica + impuesto_gss - amt_due_cxp
                         
-                        return pd.Series([utilidad_gss_final, utilidad_socio_final], index=['Utilidad Gss', 'Utilidad Socio'])
+                        return pd.Series([utilidad_gss_final, utilidad_socio_final], index=['utilidad_gss', 'utilidad_socio'])
 
-                    df_processed[['Utilidad Gss', 'Utilidad Socio']] = df_processed.apply(apply_final_profit_calculation, axis=1)
+                    df_processed[['utilidad_gss', 'utilidad_socio']] = df_processed.apply(apply_final_profit_calculation, axis=1)
 
 
                     st.session_state.processed_data = df_processed
@@ -861,21 +889,29 @@ elif page == "📁 Procesar Archivos":
                         'logistic_weight_lbs', 'meli_usd', 'costo_amazon', 
                         'total_anican', 'aditional', 'bodegal', 'socio_cuenta', 
                         'costo_cxp', 'impuesto_facturacion', 'gss_logistica', 
-                        'impuesto_gss', 'utilidad_gss', 'utilidad_socio'
+                        'impuesto_gss', 'utilidad_gss', 'utilidad_socio', 'peso_kg'
                     ]
                     # Definir las columnas a tomar la primera aparición (para campos no sumables)
                     first_cols = [
-                        'account_name', 'serial_number', 'asignacion', 'pais', 
+                        'account_name', 'serial', 'asignacion', 'pais', 
                         'tipo_calculo', 'moneda', 'logistic_type', 'order_status_meli',
-                        'date_created' # date_created debería ser el de la primera aparición
+                        'date_created', 'system', 'etiqueta_envio', 'refunded_date'
                     ]
+                    
+                    # Asegurar que solo las columnas que existen en df_processed se incluyan en la agregación
+                    agg_numeric_cols = {col: 'sum' for col in numeric_cols if col in df_processed.columns}
+                    agg_first_cols = {col: 'first' for col in first_cols if col in df_processed.columns}
+                    
+                    # Unir los diccionarios de agregación
+                    agg_dict = {**agg_numeric_cols, **agg_first_cols}
 
-                    # Crear un diccionario de funciones de agregación
-                    agg_dict = {col: 'sum' for col in numeric_cols if col in df_processed.columns}
-                    agg_dict.update({col: 'first' for col in first_cols if col in df_processed.columns})
+                    st.write("DEBUG: Diccionario de agregación para Supabase:", agg_dict)
                     
                     # Realizar la agregación
                     df_to_save_to_supabase = df_processed.groupby('order_id').agg(agg_dict).reset_index()
+
+                    st.write("DEBUG: Columnas de df_to_save_to_supabase antes de guardar:", df_to_save_to_supabase.columns.tolist())
+
 
                     # Guardar en Supabase el DataFrame agregado
                     save_success, save_message = save_orders_to_supabase(df_to_save_to_supabase)
@@ -893,16 +929,16 @@ elif page == "📁 Procesar Archivos":
                     with col_p1:
                         st.metric("Total Órdenes Procesadas", len(df_processed))
                     with col_p2:
-                        st.metric("Utilidad GSS Calculada", f"${df_processed['Utilidad Gss'].sum():,.2f}")
+                        st.metric("Utilidad GSS Calculada", f"${df_processed['utilidad_gss'].sum():,.2f}")
                     with col_p3:
-                        st.metric("Utilidad Socio Calculada", f"${df_processed['Utilidad Socio'].sum():,.2f}")
+                        st.metric("Utilidad Socio Calculada", f"${df_processed['utilidad_socio'].sum():,.2f}")
                     with col_p4:
                         st.metric("Tiendas Procesadas", df_processed['account_name'].nunique())
                     
                     st.markdown("### 👀 Vista Previa de Datos Procesados (Primeras 10 filas)")
-                    st.dataframe(df_processed[['order_id', 'account_name', 'pais', 'MELI USD', 'Costo Amazon', 
-                                                'Total_Anican', 'Aditional', 'Costo cxp', 'Impuesto Gss',
-                                                'Gss Logistica', 'Utilidad Gss', 'Utilidad Socio']].head(10))
+                    st.dataframe(df_processed[['order_id', 'account_name', 'pais', 'meli_usd', 'costo_amazon', 
+                                                'total_anican', 'aditional', 'costo_cxp', 'impuesto_gss',
+                                                'gss_logistica', 'utilidad_gss', 'utilidad_socio']].head(10))
 
                     # Opción para descargar el DataFrame procesado
                     csv = df_processed.to_csv(index=False).encode('utf-8')
@@ -1022,6 +1058,59 @@ elif page == "📋 Fórmulas de Negocio":
         <h5>🔧 Componentes:</h5>
         • <strong>Costo cxp:</strong> Amt. Due (del archivo Chile Express CXP)<br>
         • <strong>Bodegal:</strong> 3.5 si logistic_type = "xd_drop_off", sino 0<br>
-        • <strong>Socio_cuenta:</strong> 0 si order_status_meli = "refunded", sino 1<        <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
+        • <strong>Socio_cuenta:</strong> 0 si order_status_meli = "refunded", sino 1<br>
+        • <strong>Asignacion:</strong> prefijo + Serial# para unir con CXP<br><br>
+        
+        <h5>🌍 Países aplicables:</h5>
+        • Chile (MEGATIENDA SPA)<br>
+        • Colombia (VEENDELO)
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with tab3:
+        st.markdown("### Tipo C: DETODOPARATODOS, COMPRAFACIL, COMPRA-YA")
+        st.markdown("""
+        <div class="formula-box">
+        <h4>📐 Fórmula Principal</h4>
+        <strong>Utilidad Gss = MELI USD - Costo Amazon - Total - Aditional - Impuesto por facturación</strong><br><br>
+        
+        <h5>🔧 Lógica Especial:</h5>
+        • <strong>Impuesto por facturación:</strong> 1 si order_status_meli = "approved" o "in mediation", sino 0<br>
+        • <strong>Utilidad Socio:</strong> 7.5 si Utilidad > 7.5, sino Utilidad<br>
+        • <strong>Si Utilidad > 7.5:</strong> Utilidad Gss = Utilidad - Utilidad Socio<br>
+        • <strong>Si Utilidad ≤ 7.5:</strong> Utilidad Gss = 0<br><br>
+        
+        <h5>🌍 Países aplicables:</h5>
+        • Colombia (todas las tiendas tipo C)
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with tab4:
+        st.markdown("### Tipo D: FABORCARGO")
+        st.markdown("""
+        <div class="formula-box">
+        <h4>📐 Fórmula Principal</h4>
+        <strong>Utilidad Gss = Gss Logística + Impuesto Gss - Amt. Due</strong><br><br>
+        
+        <h5>🔧 Componentes:</h5>
+        • <strong>Peso:</strong> logistic_weight_lbs × quantity × 0.453592 (conversión a kg)<br>
+        • <strong>Gss Logística:</strong> según tabla ANEXO A por peso en kg<br>
+        • <strong>Impuesto Gss:</strong> Arancel + IVA (del archivo CXP)<br>
+        • <strong>Bodegal:</strong> 3.5 si logistic_type = "xd_drop_off", sino 0<br><br>
+        
+        <h5>🌍 Países aplicables:</h5>
+        • Colombia (FABORCARGO)
+        </div>
+        """, unsafe_allow_html=True)
+
+# ============================
+# FOOTER
+# ============================
+
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #666; padding: 1rem;'>
+    <p><strong>Sistema Contable Multi-País v3.0</strong> | Powered by Streamlit + Supabase</p>
+    <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
 </div>
 """, unsafe_allow_html=True)
