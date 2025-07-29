@@ -94,7 +94,7 @@ def init_supabase():
         # Si estas líneas causan un KeyError, significa que st.secrets no está configurado.
         # En ese caso, se usarán las claves directamente codificadas (menos seguro para producción).
         url = st.secrets.get("supabase", {}).get("url", "https://qzexuqkedukcwcyhrpza.supabase.co")
-        key = st.secrets.get("supabase", {}).get("key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0")
+        key = st.secrets.get("supabase", {}).get("key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImexciIjQyMDY5MzE3Mzg3fQ.T_XTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0") # Corrected key (example, replace with actual)
         
         supabase: Client = create_client(url, key)
         return supabase
@@ -129,7 +129,17 @@ def get_store_config():
                     'pais': row['pais'],
                     'tipo_calculo': row['tipo_calculo']
                 } for row in result.data}
-        return {} # Retorna un diccionario vacío si no hay configuración o hay error
+        # Fallback configuration (corrected Faborcargo's country)
+        return {
+            '1-TODOENCARGO-CO': {'prefijo': 'TDC', 'pais': 'Colombia', 'tipo_calculo': 'A'},
+            '2-MEGATIENDA SPA': {'prefijo': 'MEGA', 'pais': 'Chile', 'tipo_calculo': 'B'},
+            '3-VEENDELO': {'prefijo': 'VEEN', 'pais': 'Colombia', 'tipo_calculo': 'B'},
+            '4-MEGA TIENDAS PERUANAS': {'prefijo': 'MGA-PE', 'pais': 'Perú', 'tipo_calculo': 'A'},
+            '5-DETODOPARATODOS': {'prefijo': 'DTPT', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+            '6-COMPRAFACIL': {'prefijo': 'CFA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+            '7-COMPRA-YA': {'prefijo': 'CPYA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
+            '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Chile', 'tipo_calculo': 'D'} # Corrected country
+        }
     except Exception as e:
         st.error(f"Error obteniendo configuración de tiendas desde Supabase: {str(e)}")
         # Retorna una configuración de fallback para no romper la app si Supabase falla
@@ -141,7 +151,7 @@ def get_store_config():
             '5-DETODOPARATODOS': {'prefijo': 'DTPT', 'pais': 'Colombia', 'tipo_calculo': 'C'},
             '6-COMPRAFACIL': {'prefijo': 'CFA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
             '7-COMPRA-YA': {'prefijo': 'CPYA', 'pais': 'Colombia', 'tipo_calculo': 'C'},
-            '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Colombia', 'tipo_calculo': 'D'}
+            '8-FABORCARGO': {'prefijo': 'FBC', 'pais': 'Chile', 'tipo_calculo': 'D'} # Corrected country
         }
 
 
@@ -377,9 +387,9 @@ def calcular_utilidades(df, store_config, trm_data):
     df['moneda'] = df['pais'].map(pais_moneda)
     
     # Calcular meli_usd
-    df['meli_usd'] = df.apply(
-        lambda row: (row.get('net_real_amount', 0.0) / trm_data.get(row.get('moneda', ''), 1.0))
-        if pd.notna(row.get('net_real_amount')) and row.get('moneda') in trm_data else 0.0,
+    df['meli_usd'] = pd.to_numeric(df.get('net_real_amount', 0.0), errors='coerce').fillna(0.0) / df.apply(
+        lambda row: trm_data.get(row.get('moneda', ''), 1.0)
+        if pd.notna(row.get('net_real_amount')) and row.get('moneda') in trm_data else 1.0, # Default TRM to 1.0 to avoid division by zero
         axis=1
     )
     
@@ -388,8 +398,7 @@ def calcular_utilidades(df, store_config, trm_data):
     cols_to_init_float = [
         'aditional', 'bodegal', 'socio_cuenta', 'impuesto_facturacion', 
         'gss_logistica', 'impuesto_gss', 'utilidad_gss', 'utilidad_socio',
-        'total_anican', 'costo_cxp', 'amt_due_cxp', 'arancel_cxp', 'iva_cxp', 'peso_kg',
-        'costo_amazon' # Añadir costo_amazon aquí para inicialización
+        'total_anican', 'costo_cxp', 'amt_due_cxp', 'arancel_cxp', 'iva_cxp', 'peso_kg'
     ]
     for col in cols_to_init_float:
         if col not in df.columns: # Solo inicializar si no existen
@@ -813,7 +822,8 @@ elif page == "📁 Procesar Archivos":
                                         df_processed[col_to_check] = pd.to_numeric(df_processed[col_to_check], errors='coerce').fillna(0.0)
 
                                 df_processed['costo_cxp'] = df_processed['amt_due_cxp'] # Según la fórmula
-                                df_processed['impuesto_gss'] = df_processed['arancel_cxp'] + df_processed['iva_cxp'] # Según la fórmula
+                                # Impuesto Gss se calcula aquí para FABORCARGO, luego se aplica la condición
+                                df_processed['impuesto_gss'] = df_processed['arancel_cxp'] + df_processed['iva_cxp'] 
 
                                 # Limpiar columnas temporales del merge
                                 if 'asignacion_cxp' in df_processed.columns:
@@ -831,21 +841,36 @@ elif page == "📁 Procesar Archivos":
                     st.write("DEBUG: Columnas de df_processed después de CXP:", df_processed.columns.tolist())
 
 
-                    # --- RE-CALCULAR CAMPOS ESPECÍFICOS Y UTILIDADES DESPUÉS DE MERGES ---
-                    # Ahora que todos los datos están fusionados, aplicar los cálculos finales
+                    # --- APLICAR CÁLCULOS CONDICIONALES DESPUÉS DE TODOS LOS MERGES ---
+                    # Esto asegura que todas las columnas base estén disponibles.
 
                     # Asegurar que logistic_weight_lbs y quantity sean numéricos y no NaN
                     df_processed['logistic_weight_lbs'] = pd.to_numeric(df_processed.get('logistic_weight_lbs', 0), errors='coerce').fillna(0.0)
                     df_processed['quantity'] = pd.to_numeric(df_processed.get('quantity', 1), errors='coerce').fillna(1.0) # quantity defaults to 1 if missing for multiplication
 
-                    df_processed['bodegal'] = df_processed['logistic_type'].apply(lambda x: 3.5 if str(x).lower() == 'xd_drop_off' else 0.0)
-                    df_processed['socio_cuenta'] = df_processed['order_status_meli'].apply(lambda x: 0.0 if str(x).lower() == 'refunded' else 1.0)
-                    df_processed['impuesto_facturacion'] = df_processed['order_status_meli'].apply(lambda x: 1.0 if str(x).lower() in ['approved', 'in mediation'] else 0.0)
-                    
-                    df_processed['peso_kg'] = (df_processed['logistic_weight_lbs'] * df_processed['quantity']) * 0.453592
-                    df_processed['gss_logistica'] = df_processed['peso_kg'].apply(obtener_gss_logistica)
+                    # Calcular Bodegal SOLO para Chile
+                    bodegal_base = df_processed['logistic_type'].apply(lambda x: 3.5 if str(x).lower() == 'xd_drop_off' else 0.0)
+                    df_processed['bodegal'] = bodegal_base * (df_processed['pais'] == 'Chile').astype(float)
 
-                    # Final calcular Utilidad Gss y Utilidad Socio (separamos la lógica por tipo de cálculo)
+
+                    # Calcular Socio_cuenta SOLO para MEGATIENDA SPA y VEENDELO (Tipo B)
+                    socio_cuenta_base = df_processed['order_status_meli'].apply(lambda x: 0.0 if str(x).lower() == 'refunded' else 1.0)
+                    df_processed['socio_cuenta'] = socio_cuenta_base * (df_processed['tipo_calculo'] == 'B').astype(float)
+                    
+
+                    # Calcular Impuesto por facturacion SOLO para Tipo C
+                    impuesto_facturacion_base = df_processed['order_status_meli'].apply(lambda x: 1.0 if str(x).lower() in ['approved', 'in mediation'] else 0.0)
+                    df_processed['impuesto_facturacion'] = impuesto_facturacion_base * (df_processed['tipo_calculo'] == 'C').astype(float)
+
+                    # Calcular Gss Logistica y Impuesto Gss SOLO para FABORCARGO (Tipo D)
+                    df_processed['peso_kg'] = (df_processed['logistic_weight_lbs'] * df_processed['quantity']) * 0.453592
+                    gss_logistica_base = df_processed['peso_kg'].apply(obtener_gss_logistica)
+                    
+                    df_processed['gss_logistica'] = gss_logistica_base * (df_processed['account_name'] == '8-FABORCARGO').astype(float)
+                    df_processed['impuesto_gss'] = df_processed['impuesto_gss'] * (df_processed['account_name'] == '8-FABORCARGO').astype(float)
+
+
+                    # Final calcular Utilidad Gss y Utilidad Socio
                     def apply_final_profit_calculation(row):
                         tipo = row.get('tipo_calculo', 'A') 
                         
@@ -854,11 +879,11 @@ elif page == "📁 Procesar Archivos":
                         total_anican = row.get('total_anican', 0.0)
                         aditional = row.get('aditional', 0.0)
                         costo_cxp = row.get('costo_cxp', 0.0)
-                        bodegal = row.get('bodegal', 0.0)
-                        socio_cuenta = row.get('socio_cuenta', 0.0)
-                        impuesto_facturacion = row.get('impuesto_facturacion', 0.0)
-                        gss_logistica = row.get('gss_logistica', 0.0)
-                        impuesto_gss = row.get('impuesto_gss', 0.0)
+                        bodegal = row.get('bodegal', 0.0) # Ya será 0 si no aplica
+                        socio_cuenta = row.get('socio_cuenta', 0.0) # Ya será 0 si no aplica
+                        impuesto_facturacion = row.get('impuesto_facturacion', 0.0) # Ya será 0 si no aplica
+                        gss_logistica = row.get('gss_logistica', 0.0) # Ya será 0 si no aplica
+                        impuesto_gss = row.get('impuesto_gss', 0.0) # Ya será 0 si no aplica
                         amt_due_cxp = row.get('amt_due_cxp', 0.0) 
 
                         utilidad_gss_final = 0.0
@@ -896,7 +921,9 @@ elif page == "📁 Procesar Archivos":
                         'logistic_weight_lbs', 'meli_usd', 'costo_amazon', 
                         'total_anican', 'aditional', 'bodegal', 'socio_cuenta', 
                         'costo_cxp', 'impuesto_facturacion', 'gss_logistica', 
-                        'impuesto_gss', 'utilidad_gss', 'utilidad_socio', 'peso_kg'
+                        'impuesto_gss', 'utilidad_gss', 'utilidad_socio', 'peso_kg',
+                        # Add any other numeric columns that might be added during processing and need to be summed
+                        'amt_due_cxp', 'arancel_cxp', 'iva_cxp'
                     ]
                     # Definir las columnas a tomar la primera aparición (para campos no sumables)
                     first_cols = [
@@ -931,7 +958,7 @@ elif page == "📁 Procesar Archivos":
                     else:
                         st.error(f"❌ Error al guardar en Supabase: {save_message}")
                     
-                    # Limpiar cache para forzar la recarga del dashboard
+                    # Limpiar cache para force the dashboard to reload
                     st.cache_data.clear()
                     
                     # Mostrar resumen de lo procesado
