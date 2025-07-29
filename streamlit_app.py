@@ -1,7 +1,7 @@
 st.info(f"Ref='{ref_col}', Amt='{amt_col}', Arancel='{arancel_col}', IVA='{iva_col}'")
                         
                         # Crear DataFrame para merge
-                        
+                        df_cxp = pd.DataFrame()
                         df_cxp['asignacion_cxp'] = df_test_cxp[ref_col].astype(str).str.strip()
                         df_cxp['amt_due_cxp'] = pd.to_numeric(df_test_cxp[amt_col], errors='coerce').fillna(0.0)
                         
