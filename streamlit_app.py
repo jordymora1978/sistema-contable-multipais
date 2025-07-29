@@ -341,8 +341,8 @@ def calcular_utilidades(df, store_config, trm_data):
        Asume que df es el DataFrame de Drapify pre-procesado."""
     
     # Asegurar que las columnas de referencia sean strings
-    df['Serial#'] = df.get('Serial#', pd.Series()).astype(str)
-    df['order_id'] = df.get('order_id', pd.Series()).astype(str)
+    df['Serial#'] = df.get('Serial#', pd.Series(dtype=str)).astype(str)
+    df['order_id'] = df.get('order_id', pd.Series(dtype=str)).astype(str)
     
     # Calcular columna Asignacion
     df['Asignacion'] = df.apply(
@@ -370,13 +370,25 @@ def calcular_utilidades(df, store_config, trm_data):
     )
     
     # Inicializar columnas que pueden venir de merges o cálculos específicos
-    for col in ['Aditional', 'Bodegal', 'Socio_cuenta', 'Impuesto por facturacion', 
-                'Gss Logistica', 'Impuesto Gss', 'Utilidad Gss', 'Utilidad Socio',
-                'Total_Anican', 'Costo cxp', 'Amt_Due_CXP', 'Arancel_CXP', 'IVA_CXP', 'Peso_kg']:
+    # y asegurar su tipo numérico para operaciones posteriores
+    cols_to_init_float = [
+        'Aditional', 'Bodegal', 'Socio_cuenta', 'Impuesto por facturacion', 
+        'Gss Logistica', 'Impuesto Gss', 'Utilidad Gss', 'Utilidad Socio',
+        'Total_Anican', 'Costo cxp', 'Amt_Due_CXP', 'Arancel_CXP', 'IVA_CXP', 'Peso_kg'
+    ]
+    for col in cols_to_init_float:
         if col not in df.columns: # Solo inicializar si no existen
             df[col] = 0.0
+        else:
+            # Asegurar que la columna es numérica y rellenar NaN si existen
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
 
-    df['Costo Amazon'] = df['Declare Value'].fillna(0) * df['quantity'].fillna(1)
+    # Convertir 'Declare Value' y 'quantity' a numérico al inicio de la función
+    # para evitar el error 'float' object has no attribute 'fillna'
+    df['Declare Value'] = pd.to_numeric(df['Declare Value'], errors='coerce').fillna(0)
+    df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(1) # quantity defaults to 1 if missing for multiplication
+
+    df['Costo Amazon'] = df['Declare Value'] * df['quantity']
 
     # El resto de los cálculos específicos por tipo se harán en el loop principal
     # después de que todos los archivos (Anican, Aditionals, CXP) hayan sido fusionados.
@@ -892,7 +904,7 @@ elif page == "💱 Configurar TRM":
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.markdown("### �🇴 Colombia")
+            st.markdown("### 🇨🇴 Colombia")
             cop_trm = st.number_input(
                 "COP por 1 USD",
                 value=float(st.session_state.trm_data.get('COP', 4000.0)),
@@ -1039,4 +1051,3 @@ st.markdown("""
     <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
 </div>
 """, unsafe_allow_html=True)
-�
