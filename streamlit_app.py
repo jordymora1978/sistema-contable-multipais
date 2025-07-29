@@ -30,6 +30,7 @@ def obtener_trm():
         df = pd.DataFrame(result.data)
         if 'date_updated' in df.columns:
             df['date_updated'] = pd.to_datetime(df['date_updated'])
+
         if 'created_at' in df.columns:
             df['created_at'] = pd.to_datetime(df['created_at'])
         return df
