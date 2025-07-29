@@ -207,7 +207,7 @@ def save_trm_rates(trm_data):
                 result = supabase.table('trm_rates').insert(records_to_insert).execute()
                 return True, "TRM guardado exitosamente"
             return False, "No hay datos TRM para guardar"
-        return False, "No se pudo conectar a Supabase para guardar TRM"
+        return False, f"No se pudo conectar a Supabase para guardar TRM: {str(e)}"
     except Exception as e:
         return False, f"Error al guardar TRM en Supabase: {str(e)}"
 
@@ -801,10 +801,16 @@ elif page == "📁 Procesar Archivos":
                                     right_on='asignacion_cxp',
                                     how='left'
                                 )
-                                # Fill NaNs for merged columns. These were already handled in df_cxp, but for non-matches they will be NaN.
-                                df_processed['amt_due_cxp'] = df_processed['amt_due_cxp'].fillna(0.0)
-                                df_processed['arancel_cxp'] = df_processed['arancel_cxp'].fillna(0.0)
-                                df_processed['iva_cxp'] = df_processed['iva_cxp'].fillna(0.0)
+                                
+                                # --- INICIALIZACIÓN EXPLÍCITA DE COLUMNAS CXP DESPUÉS DEL MERGE ---
+                                # Esto garantiza que las columnas siempre existan en df_processed
+                                # incluso si el merge no tuvo coincidencias.
+                                for col_to_check in ['amt_due_cxp', 'arancel_cxp', 'iva_cxp']:
+                                    if col_to_check not in df_processed.columns:
+                                        df_processed[col_to_check] = 0.0 # Añadir con valor por defecto
+                                    else:
+                                        df_processed[col_to_check] = pd.to_numeric(df_processed[col_to_check], errors='coerce').fillna(0.0)
+
                                 df_processed['costo_cxp'] = df_processed['amt_due_cxp'] # Según la fórmula
                                 df_processed['impuesto_gss'] = df_processed['arancel_cxp'] + df_processed['iva_cxp'] # Según la fórmula
 
