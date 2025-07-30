@@ -195,8 +195,7 @@ def try_read_cxp(uploaded_file):
 
     st.error("❌ No se pudieron encontrar las columnas clave ('Ref #' y 'Amt. Due') en el archivo CXP.")
     return None
-
-def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file):
+    def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file):
     """Procesa y une todos los DataFrames de los archivos cargados."""
     
     st.subheader("Paso 1: Cargando y Limpiando Archivos Individuales")
@@ -472,8 +471,7 @@ def save_processed_data_to_supabase(df_to_save):
     except Exception as e:
         st.error(f"❌ Error al guardar en Supabase: {e}")
         st.exception(e)
-
-# --- Páginas de la Aplicación ---
+        # --- Páginas de la Aplicación ---
 def page_process_files():
     st.markdown("<h1>📂 Cargar y Unir Archivos de Órdenes</h1>", unsafe_allow_html=True)
     st.info("Sube tus archivos de Drapify, Anican Logistics, CXP y Aditionals. El sistema los procesará y unirá en Supabase.")
@@ -527,9 +525,6 @@ def page_view_data():
         st.cache_data.clear()
         st.rerun()
 
-    try:
-        response = supabase.table('orders').select('*').limit(500).order('created_at', desc=True).execute()
-        
     try:
         response = supabase.table('orders').select('*').limit(500).order('created_at', desc=True).execute()
         
