@@ -63,7 +63,7 @@ def get_valid_supabase_columns():
         st.error(f"Error al obtener columnas de Supabase: {e}")
         return []
 
-# --- Mapeo de columnas CORREGIDO ---
+# --- Mapeo de columnas ---
 # Este mapeo define cómo las columnas de tus DataFrames (después de la limpieza)
 # se corresponden con los nombres de las columnas en tu base de datos Supabase.
 supabase_db_schema_mapping = {
@@ -103,7 +103,7 @@ supabase_db_schema_mapping = {
     'iva': 'iva_cxp', 
     'handling': 'handling',
     'dest_delivery': 'dest_delivery',
-    'amt_due': 'amt_due_cxp', # Esta fue la columna clave que corregimos en el mapeo
+    'amt_due': 'amt_due_cxp', 
     'goods_value': 'goods_value',
 
     # Columnas de ADITIONALS (nombres después del procesamiento → nombres en DB)
@@ -539,7 +539,7 @@ def page_process_files():
         cxp_file = st.file_uploader("🇨🇱 **Chile Express (CXP)**", type=["csv", "xlsx", "xls"], key="cxp_uploader")
         aditionals_file = st.file_uploader("➕ **Anican Aditionals**", type=["csv", "xlsx", "xls"], key="aditionals_uploader")
 
-    st.markdown("---")
+    ---
     
     # Botón para verificar columnas de Supabase
     if st.button("🔍 Verificar Columnas de Supabase"):
@@ -604,7 +604,7 @@ def page_debug_schema():
         valid_columns = get_valid_supabase_columns()
         if valid_columns:
             st.success(f"✅ La tabla **'orders'** existe en Supabase con **{len(valid_columns)}** columnas.")
-            st.markdown("---")
+            ---
             st.subheader("Columnas encontradas en Supabase:")
             # Mostrar columnas en formato de lista para mejor lectura
             for i, col in enumerate(sorted(valid_columns), 1):
@@ -660,8 +660,7 @@ def page_debug_schema():
             );
             ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
             ```
-            """)
-
+            """) 
     st.subheader("Mapeo de Columnas Definido en la Aplicación")
     st.write("Este es el mapeo entre los nombres de columnas de tus archivos procesados y los nombres de columnas en la base de datos de Supabase:")
     
@@ -699,7 +698,7 @@ def page_debug_schema():
             if not missing_in_db: # Only if there are no missing columns, but also no present ones
                 st.info("Parece que no hay columnas mapeadas que coincidan con las de Supabase.")
 
-    st.markdown("---")
+    ---
     st.subheader("🛠️ Información del Sistema")
     
     col1, col2 = st.columns(2)
