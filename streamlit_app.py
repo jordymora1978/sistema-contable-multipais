@@ -19,113 +19,130 @@ st.set_page_config(
 def init_supabase_client():
     """Inicializa la conexión con Supabase, usando st.secrets o valores de fallback."""
     try:
-        # Intenta cargar desde st.secrets.
-        # Si estas líneas causan un KeyError, significa que st.secrets no está configurado.
-        # En ese caso, se usarán las claves directamente codificadas (MENOS SEGURO PARA PRODUCCIÓN).
         url = st.secrets.get("supabase", {}).get("url", "https://qzexuqkedukcwcyhrpza.supabase.co")
         key = st.secrets.get("supabase", {}).get("key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0")
         
         if not url or not key:
-            st.error("Error: Las credenciales de Supabase (URL o KEY) no están configuradas correctamente en st.secrets o como fallback. La app no puede conectar.")
-            st.stop() # Detiene la ejecución si las credenciales son inválidas
+            st.error("Error: Las credenciales de Supabase no están configuradas correctamente.")
+            st.stop()
 
         return create_client(url, key)
     except Exception as e:
-        st.error(f"Error crítico al inicializar Supabase: {e}. La aplicación se detendrá.")
+        st.error(f"Error crítico al inicializar Supabase: {e}")
         st.exception(e)
-        st.stop() # Detiene la aplicación si hay un error crítico al conectar
+        st.stop()
 
 supabase: Client = init_supabase_client()
 
-# --- Mapeo de columnas para Supabase ---
-# Este diccionario define cómo las columnas del DataFrame procesado (clave)
-# se mapearán a los nombres de las columnas en tu tabla de Supabase (valor).
-# ES CRUCIAL QUE LOS VALORES (nombres de la DB) COINCIDAN EXACTAMENTE CON TU ESQUEMA EN SUPABASE.
+# --- Función para obtener columnas válidas de Supabase ---
+@st.cache_data(ttl=300)
+def get_valid_supabase_columns():
+    """Obtiene las columnas válidas de la tabla 'orders' en Supabase."""
+    try:
+        result = supabase.table('orders').select('*').limit(1).execute()
+        if result.data and len(result.data) > 0:
+            return list(result.data[0].keys())
+        else:
+            # Si la tabla está vacía, hacer un INSERT de prueba
+            try:
+                test_record = {'order_id_drapify': 'TEST_SCHEMA_CHECK'}
+                insert_result = supabase.table('orders').insert(test_record).execute()
+                if insert_result.data:
+                    columns = list(insert_result.data[0].keys())
+                    # Eliminar el registro de prueba
+                    supabase.table('orders').delete().eq('order_id_drapify', 'TEST_SCHEMA_CHECK').execute()
+                    return columns
+            except:
+                pass
+            return []
+    except Exception as e:
+        if "relation \"public.orders\" does not exist" in str(e) or "orders" in str(e):
+            st.error("❌ La tabla 'orders' no existe en Supabase. Necesitas crearla primero.")
+            st.info("💡 Ve a la pestaña '🔧 Depuración de Schema' para crear la tabla automáticamente.")
+        else:
+            st.error(f"Error al obtener columnas de Supabase: {e}")
+        return []
+
+# --- Mapeo de columnas CORREGIDO ---
 supabase_db_schema_mapping = {
-    # Columnas de DRAPIFY (ya con nombres estandarizados)
+    # Columnas de DRAPIFY (nombres después del procesamiento → nombres en DB)
     'system_hash': 'system_hash',
     'serial_hash': 'serial_hash',
-    'order_id_drapify': 'order_id_drapify', # Usado como PK/Unique para upsert
+    'order_id_drapify': 'order_id_drapify',
     'account_name': 'account_name',
     'date_created': 'date_created',
     'quantity_drapify': 'quantity_drapify',
     'logistic_type': 'logistic_type',
     'order_status_meli': 'order_status_meli',
     'etiqueta_envio': 'etiqueta_envio',
-    'declare_value': 'declare_value',
+    'declare_value_drapify': 'declare_value',  # CORREGIDO
     'net_real_amount': 'net_real_amount',
     'logistic_weight_lbs': 'logistic_weight_lbs',
     'refunded_date': 'refunded_date',
 
-    # Columnas de ANICAN LOGISTICS (ya con nombres estandarizados)
-    'order_number_anican': 'order_number_anican', # <-- AQUI SE ASEGURA ESTE NOMBRE
-    'reference_anican': 'reference_anican', # Clave de unión con Drapify
+    # Columnas de ANICAN LOGISTICS (nombres después del procesamiento → nombres en DB)
+    'order_number_anican': 'order_number_anican',
+    'reference_anican': 'reference_anican',
     'fob': 'fob',
     'insurance': 'insurance',
-    'logistics_anican': 'logistics_anican',
+    'logistics_anican_value': 'logistics_anican',  # CORREGIDO
     'duties_prealert': 'duties_prealert',
     'duties_pay': 'duties_pay',
     'duty_fee': 'duty_fee',
     'saving': 'saving',
-    'total_anican': 'total_anican',
-    'external_id': 'external_id',
+    'total_anican_value': 'total_anican',  # CORREGIDO
+    'external_id_anican': 'external_id',  # CORREGIDO
 
-    # Columnas de CXP (ya con nombres estandarizados)
-    'date_cxp': 'date_cxp',
-    'ref_hash_cxp': 'ref_hash_cxp', # Clave de unión con Asignacion
+    # Columnas de CXP (nombres después del procesamiento → nombres en DB)
+    'date': 'date_cxp',  # CORREGIDO
+    'ref_hash': 'ref_hash_cxp',  # CORREGIDO
     'co_aereo': 'co_aereo',
-    'arancel_cxp': 'arancel_cxp',
-    'iva_cxp': 'iva_cxp',
+    'arancel': 'arancel_cxp',  # CORREGIDO
+    'iva': 'iva_cxp',  # CORREGIDO
     'handling': 'handling',
     'dest_delivery': 'dest_delivery',
-    'amt_due_cxp': 'amt_due_cxp',
+    'amt_due': 'amt_due_cxp',  # CORREGIDO - Esta era la que causaba el error
     'goods_value': 'goods_value',
 
-    # Columnas de ADITIONALS (ya con nombres estandarizados)
-    'order_id_aditionals': 'order_id_aditionals', # Clave de unión con Anican Logistics
+    # Columnas de ADITIONALS (nombres después del procesamiento → nombres en DB)
+    'order_id_aditionals': 'order_id_aditionals',
     'quantity_aditionals': 'quantity_aditionals',
     'unit_price_aditionals': 'unit_price_aditionals',
 
-    # Columna calculada para unión
+    # Columna calculada
     'asignacion': 'asignacion',
     
-    # Columna para registrar cuándo se subió/procesó el registro en la app
-    'processed_at_app': 'processed_at_app' 
+    # Metadatos
+    'processed_at_app': 'processed_at_app'
 }
 
 # --- Funciones de Utilidad ---
 def leer_excel_o_csv(uploaded_file):
-    """
-    Lee un archivo Excel o CSV y lo devuelve como DataFrame,
-    cargando todas las columnas como string inicialmente para robustez.
-    """
+    """Lee un archivo Excel o CSV y lo devuelve como DataFrame."""
     try:
-        # Vuelve al inicio del archivo para asegurar una lectura completa cada vez
         uploaded_file.seek(0)
         if uploaded_file.name.endswith('.csv'):
-            # Intenta detectar el delimitador automáticamente o usa la coma por defecto
             try:
-                # Lee un fragmento para intentar detectar el delimitador
                 sample = uploaded_file.getvalue().decode('utf-8').splitlines()[:5]
                 sniffer = pd.io.common.DialectSniffer()
                 dialect = sniffer.sniff(''.join(sample))
-                uploaded_file.seek(0) # Vuelve al inicio del archivo
-                return pd.read_csv(uploaded_file, dialect=dialect, dtype=str) # Leer todo como string inicialmente
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, dialect=dialect, dtype=str)
             except Exception:
-                uploaded_file.seek(0) # Vuelve al inicio del archivo
-                return pd.read_csv(uploaded_file, dtype=str) # Prueba con delimitador por defecto
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, dtype=str)
         elif uploaded_file.name.endswith(('.xlsx', '.xls')):
-            return pd.read_excel(uploaded_file, dtype=str) # Leer todo como string inicialmente
+            return pd.read_excel(uploaded_file, dtype=str)
         else:
-            st.error(f"Formato de archivo no soportado: {uploaded_file.name}. Por favor, sube .csv, .xlsx o .xls.")
+            st.error(f"Formato de archivo no soportado: {uploaded_file.name}")
             return None
     except Exception as e:
         st.error(f"Error al leer el archivo {uploaded_file.name}: {e}")
-        st.exception(e) # Muestra el traceback completo
+        st.exception(e)
         return None
 
 def limpiar_nombres_columnas_generico(df):
-    """Limpia los nombres de las columnas de un DataFrame a snake_case, sin renombrados específicos."""
+    """Limpia los nombres de las columnas de un DataFrame a snake_case."""
     if df is None:
         return None
     new_columns = []
@@ -136,29 +153,25 @@ def limpiar_nombres_columnas_generico(df):
     return df
 
 def try_read_cxp(uploaded_file):
-    """
-    Intenta leer el archivo CXP probando diferentes filas como encabezado
-    y buscando columnas clave como 'Ref #' y 'Amt. Due'.
-    """
+    """Intenta leer el archivo CXP probando diferentes filas como encabezado."""
     if uploaded_file is None:
         return None
 
-    file_content = uploaded_file.getvalue() # Guarda el contenido para poder leerlo varias veces
+    file_content = uploaded_file.getvalue()
 
-    for header_row_index in range(5): # Probar encabezados en las filas 0 a 4 (índice 0-4)
+    for header_row_index in range(5):
         try:
             file_stream = io.BytesIO(file_content)
             if uploaded_file.name.endswith('.csv'):
                 df_test = pd.read_csv(file_stream, header=header_row_index, dtype=str)
-            else: # .xlsx o .xls
+            else:
                 df_test = pd.read_excel(file_stream, header=header_row_index, dtype=str)
             
-            # --- RENOMBRADO EXPLÍCITO DE COLUMNAS CLAVE DE CXP AQUÍ ---
-            # Esto es CRUCIAL para 'Ref #' y 'Amt. Due'
+            # Renombrado explícito de columnas clave de CXP
             cxp_renames = {
                 'Ref #': 'ref_hash',
                 'Amt. Due': 'amt_due',
-                'Date': 'date', # También Date para consistencia
+                'Date': 'date',
                 'CO Aereo': 'co_aereo',
                 'Arancel': 'arancel',
                 'IVA': 'iva',
@@ -166,50 +179,39 @@ def try_read_cxp(uploaded_file):
                 'Dest. Delivery': 'dest_delivery',
                 'Goods Value': 'goods_value',
             }
-            # Aplica el renombrado solo si las columnas originales existen en df_test
-            # Se usa una copia de df_test.columns para evitar modificar la lista mientras se itera
-            current_cols_copy = df_test.columns.copy() 
+            
+            current_cols_copy = df_test.columns.copy()
             rename_map = {orig_name: new_name for orig_name, new_name in cxp_renames.items() if orig_name in current_cols_copy}
             df_test = df_test.rename(columns=rename_map)
-
-            # --- AHORA APLICA LA LIMPIEZA GENÉRICA A TODO EL DATAFRAME ---
+            
             df_test_cleaned = limpiar_nombres_columnas_generico(df_test.copy())
-
-            # Busca columnas con nombres esperados (después del renombrado explícito y la limpieza genérica)
-            ref_col_found = next((col for col in df_test_cleaned.columns if 'ref_hash' in col), None) # Ahora buscará 'ref_hash'
-            amt_due_col_found = next((col for col in df_test_cleaned.columns if 'amt_due' in col), None) # Ahora buscará 'amt_due'
+            
+            ref_col_found = next((col for col in df_test_cleaned.columns if 'ref_hash' in col), None)
+            amt_due_col_found = next((col for col in df_test_cleaned.columns if 'amt_due' in col), None)
 
             if ref_col_found and amt_due_col_found:
-                # Si las columnas clave se encuentran, devuelve el DataFrame ya renombrado y limpiado
                 return df_test_cleaned
         except Exception as e:
-            pass # Continúa intentando otros encabezados
+            pass
 
-    st.error("❌ No se pudieron encontrar las columnas clave ('Ref #' y 'Amt. Due') en las primeras 5 filas del archivo CXP. Por favor, verifica el formato.")
+    st.error("❌ No se pudieron encontrar las columnas clave ('Ref #' y 'Amt. Due') en el archivo CXP.")
     return None
 
 def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file):
-    """
-    Procesa y une todos los DataFrames de los archivos cargados,
-    sin realizar cálculos complejos, solo preparación para la carga en Supabase.
-    """
-    df_drapify = None
-    df_anican = None
-    df_cxp = None
-    df_aditionals = None
-
+    """Procesa y une todos los DataFrames de los archivos cargados."""
+    
     st.subheader("Paso 1: Cargando y Limpiando Archivos Individuales")
 
     # --- Cargar DRAPIFY (archivo base) ---
     if drapify_file:
         df_drapify_raw = leer_excel_o_csv(drapify_file)
         if df_drapify_raw is not None:
-            # --- RENOMBRADO EXPLÍCITO DE COLUMNAS CLAVE DE DRAPIFY AQUÍ ---
+            # Renombrado explícito de columnas clave de DRAPIFY
             drapify_renames = {
                 'System#': 'System_Hash', 
                 'Serial#': 'Serial_Hash', 
-                'order_id': 'Order_ID', # Nombre original es order_id
-                'account_name': 'Account_Name', # Nombre original es account_name
+                'order_id': 'Order_ID',
+                'account_name': 'Account_Name',
                 'date_created': 'Date_Created',
                 'quantity': 'Quantity_Drapify',
                 'logistic_type': 'Logistic_Type',
@@ -220,43 +222,43 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
                 'logistic_weight_lbs': 'Logistic_Weight_Lbs',
                 'refunded_date': 'Refunded_Date',
             }
-            # Aplica el renombrado solo si las columnas originales existen en df_drapify_raw
-            current_cols_copy = df_drapify_raw.columns.copy() 
+            
+            current_cols_copy = df_drapify_raw.columns.copy()
             rename_map = {orig_name: new_name for orig_name, new_name in drapify_renames.items() if orig_name in current_cols_copy}
             df_drapify = df_drapify_raw.rename(columns=rename_map)
             
-            # --- AHORA APLICA LA LIMPIEZA GENÉRICA A TODO EL DATAFRAME ---
             df_drapify = limpiar_nombres_columnas_generico(df_drapify)
 
-            # Convierte columnas numéricas *después* de renombrar y limpiar
-            for col in ['quantity_drapify', 'declare_value', 'net_real_amount', 'logistic_weight_lbs']:
+            # Convertir columnas numéricas
+            for col in ['quantity_drapify', 'declare_value_drapify', 'net_real_amount', 'logistic_weight_lbs']:
                 if col in df_drapify.columns:
                     df_drapify[col] = pd.to_numeric(df_drapify[col], errors='coerce').fillna(0)
-            # Asegura que las columnas de unión y cálculo de Asignacion sean string y limpias
+            
+            # Asegurar que las columnas de texto sean string
             for col in ['order_id', 'serial_hash', 'account_name', 'order_status_meli', 'logistic_type']:
-                 if col in df_drapify.columns:
+                if col in df_drapify.columns:
                     df_drapify[col] = df_drapify[col].astype(str).str.strip()
 
             st.info("✅ Archivo DRAPIFY cargado y columnas limpias.")
         else:
-            st.error("❌ No se pudo cargar el archivo DRAPIFY. Es un archivo base necesario.")
-            return pd.DataFrame() # Retorna vacío si el base falla
+            st.error("❌ No se pudo cargar el archivo DRAPIFY.")
+            return pd.DataFrame()
     else:
-        st.warning("⚠️ No se ha cargado el archivo DRAPIFY. No se puede continuar sin él.")
+        st.warning("⚠️ No se ha cargado el archivo DRAPIFY.")
         return pd.DataFrame()
 
-    # Iniciar el DataFrame procesado con Drapify. Renombramos order_id para el merge.
+    # Iniciar el DataFrame procesado con Drapify
     df_processed = df_drapify.rename(columns={'order_id': 'order_id_drapify'}).copy()
 
     # --- Cargar ANICAN LOGISTICS ---
     if anican_logistics_file:
         df_anican_raw = leer_excel_o_csv(anican_logistics_file)
         if df_anican_raw is not None:
-            # --- RENOMBRADO EXPLÍCITO DE COLUMNAS CLAVE DE ANICAN LOGISTICS AQUÍ ---
             anican_renames = {
-                'Order number': 'Order_Number_Anican', # <--- ¡CAMBIO CLAVE AQUÍ!
-                'Reference': 'Reference_Anican', # Esta es la clave de unión con Drapify
-                'FOB': 'FOB', 'Insurance': 'Insurance',
+                'Order number': 'Order_Number_Anican',
+                'Reference': 'Reference_Anican',
+                'FOB': 'FOB', 
+                'Insurance': 'Insurance',
                 'Logistics': 'Logistics_Anican_Value',
                 'Duties Prealert': 'Duties_Prealert',
                 'Duties Pay': 'Duties_Pay',
@@ -265,17 +267,17 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
                 'Total': 'Total_Anican_Value',
                 'External Id': 'External_ID_Anican',
             }
-            current_cols_copy = df_anican_raw.columns.copy() 
+            
+            current_cols_copy = df_anican_raw.columns.copy()
             rename_map = {orig_name: new_name for orig_name, new_name in anican_renames.items() if orig_name in current_cols_copy}
             df_anican = df_anican_raw.rename(columns=rename_map)
-            # --- AHORA APLICA LA LIMPIEZA GENÉRICA A TODO EL DATAFRAME ---
             df_anican = limpiar_nombres_columnas_generico(df_anican)
 
-            # Asegurar que las claves de unión y otras cols importantes sean string y limpias
-            for col in ['order_number_anican', 'reference_anican', 'external_id_anican']: # <-- AQUI YA ES 'order_number_anican'
+            # Asegurar tipos de datos
+            for col in ['order_number_anican', 'reference_anican', 'external_id_anican']:
                 if col in df_anican.columns:
                     df_anican[col] = df_anican[col].astype(str).str.strip()
-            # Convertir a numérico las columnas que deben serlo
+            
             for col in ['fob', 'insurance', 'logistics_anican_value', 'duties_prealert', 'duties_pay', 'duty_fee', 'saving', 'total_anican_value']:
                 if col in df_anican.columns:
                     df_anican[col] = pd.to_numeric(df_anican[col], errors='coerce').fillna(0)
@@ -286,69 +288,65 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
     if aditionals_file:
         df_aditionals_raw = leer_excel_o_csv(aditionals_file)
         if df_aditionals_raw is not None:
-            # --- RENOMBRADO EXPLÍCITO DE COLUMNAS CLAVE DE ADITIONALS AQUÍ ---
             aditionals_renames = {
-                'Order Id': 'Order_ID_Aditionals', # Esta es la clave de unión
+                'Order Id': 'Order_ID_Aditionals',
                 'Quantity': 'Quantity_Aditionals',
                 'UnitPrice': 'Unit_Price_Aditionals',
             }
-            current_cols_copy = df_aditionals_raw.columns.copy() 
+            
+            current_cols_copy = df_aditionals_raw.columns.copy()
             rename_map = {orig_name: new_name for orig_name, new_name in aditionals_renames.items() if orig_name in current_cols_copy}
             df_aditionals = df_aditionals_raw.rename(columns=rename_map)
-            # --- AHORA APLICA LA LIMPIEZA GENÉRICA A TODO EL DATAFRAME ---
             df_aditionals = limpiar_nombres_columnas_generico(df_aditionals)
 
             if 'order_id_aditionals' in df_aditionals.columns:
                 df_aditionals['order_id_aditionals'] = df_aditionals['order_id_aditionals'].astype(str).str.strip()
+            
             for col in ['quantity_aditionals', 'unit_price_aditionals']:
                 if col in df_aditionals.columns:
                     df_aditionals[col] = pd.to_numeric(df_aditionals[col], errors='coerce').fillna(0)
+            
             st.info("✅ Archivo Aditionals cargado y columnas limpias.")
 
     # --- Cargar CXP ---
     if cxp_file:
-        # try_read_cxp ya realiza el renombrado explícito y la limpieza genérica
-        df_cxp = try_read_cxp(cxp_file) 
+        df_cxp = try_read_cxp(cxp_file)
         if df_cxp is not None:
-            # Aquí df_cxp ya debería tener 'ref_hash', 'amt_due' y estar limpiado genéricamente
-            # Solo asegurar que la clave de unión sea string y limpia
-            if 'ref_hash' in df_cxp.columns: # Debe ser 'ref_hash' después del try_read_cxp
+            if 'ref_hash' in df_cxp.columns:
                 df_cxp['ref_hash'] = df_cxp['ref_hash'].astype(str).str.strip()
+            
             for col in ['co_aereo', 'arancel', 'iva', 'handling', 'dest_delivery', 'amt_due', 'goods_value']:
                 if col in df_cxp.columns:
                     df_cxp[col] = pd.to_numeric(df_cxp[col], errors='coerce').fillna(0)
+            
             st.info("✅ Archivo CXP cargado y columnas limpias.")
-
 
     st.subheader("Paso 2: Uniendo DataFrames")
 
-    # 1. Unir Drapify con Anican Logistics (usando order_id_drapify y reference_anican)
-    # Las columnas para merge deben existir y estar en el formato correcto (str)
-    if df_anican is not None and 'reference_anican' in df_anican.columns and 'order_id_drapify' in df_processed.columns:
+    # 1. Unir Drapify con Anican Logistics
+    if 'df_anican' in locals() and 'reference_anican' in df_anican.columns:
         df_processed = pd.merge(df_processed, df_anican,
                                 left_on='order_id_drapify', right_on='reference_anican',
-                                how='left', suffixes=('', '_anican_logistics')) # Sufijo
+                                how='left', suffixes=('', '_anican_logistics'))
         st.success("✅ Drapify unido con Anican Logistics.")
     else:
-        st.warning("⚠️ No se pudo unir Drapify con Anican Logistics. Se omitirá esta unión.")
+        st.warning("⚠️ No se pudo unir Drapify con Anican Logistics.")
 
-    # 2. Unir con Aditionals (usando order_number_anican y order_id_aditionals)
-    # La columna 'order_number_anican' debe venir de la unión previa con Anican Logistics.
-    if df_aditionals is not None and 'order_id_aditionals' in df_aditionals.columns:
-        if 'order_number_anican' in df_processed.columns: # Asegurarse de que la columna existe en el DF procesado
+    # 2. Unir con Aditionals
+    if 'df_aditionals' in locals() and 'order_id_aditionals' in df_aditionals.columns:
+        if 'order_number_anican' in df_processed.columns:
             df_processed = pd.merge(df_processed, df_aditionals,
                                     left_on='order_number_anican', right_on='order_id_aditionals',
-                                    how='left', suffixes=('', '_aditionals_merged')) # Sufijo
+                                    how='left', suffixes=('', '_aditionals_merged'))
             st.success("✅ Datos unidos con Aditionals.")
         else:
-            st.warning("⚠️ La columna 'order_number_anican' no se encontró en el DF principal (puede que Anican Logistics no se haya cargado o unido correctamente). No se puede unir con Aditionals.")
+            st.warning("⚠️ No se puede unir con Aditionals - falta 'order_number_anican'.")
     else:
-        st.warning("⚠️ No se pudo unir con Aditionals. Se omitirá esta unión.")
+        st.warning("⚠️ No se pudo unir con Aditionals.")
 
-    # 3. Calcular columna 'Asignacion' (necesaria para la unión con CXP)
-    df_processed['asignacion'] = None # Inicializar
+    # 3. Calcular columna 'Asignacion'
+    df_processed['asignacion'] = None
     if 'account_name' in df_processed.columns and 'serial_hash' in df_processed.columns:
-        # Asegurar que serial_hash y account_name sean string y limpiar espacios
         df_processed['serial_hash'] = df_processed['serial_hash'].astype(str).str.strip()
         df_processed['account_name'] = df_processed['account_name'].astype(str).str.strip()
 
@@ -364,143 +362,215 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
         df_processed['asignacion'] = df_processed['asignacion'].astype(str).str.strip()
         st.success("✅ Columna 'Asignacion' calculada.")
     else:
-        st.warning("⚠️ No se pudo calcular 'Asignacion'. Faltan columnas clave ('account_name' o 'serial_hash') en DRAPIFY. Revisa tu archivo DRAPIFY.")
+        st.warning("⚠️ No se pudo calcular 'Asignacion'.")
 
-
-    # 4. Unir con CXP (usando asignacion y ref_hash)
-    if df_cxp is not None and 'ref_hash' in df_cxp.columns and 'asignacion' in df_processed.columns: # 'ref_hash' ya existe después del try_read_cxp
-        # Asegurar que la columna 'asignacion' sea de tipo string y sin espacios, ya que se usa como clave de unión
+    # 4. Unir con CXP
+    if 'df_cxp' in locals() and 'ref_hash' in df_cxp.columns and 'asignacion' in df_processed.columns:
         df_processed['asignacion'] = df_processed['asignacion'].astype(str).str.strip()
         df_processed = pd.merge(df_processed, df_cxp,
-                                left_on='asignacion', right_on='ref_hash', # Ahora usamos 'ref_hash' de df_cxp
-                                how='left', suffixes=('', '_cxp_merged')) # Sufijo
+                                left_on='asignacion', right_on='ref_hash',
+                                how='left', suffixes=('', '_cxp_merged'))
         st.success("✅ Datos unidos con CXP.")
     else:
-        st.warning("⚠️ No se pudo unir con CXP. Se omitirá esta unión (asegúrate de que CXP tenga 'Ref #' y que 'Asignacion' se haya calculado correctamente).")
+        st.warning("⚠️ No se pudo unir con CXP.")
 
-    st.success("🎉 ¡Todos los archivos han sido procesados y unidos en un solo DataFrame!")
-    # Reemplaza todos los NaN y NaT con None para una mejor inserción en Supabase
-    return df_processed.replace({np.nan: None, pd.NaT: None}) 
+    st.success("🎉 ¡Todos los archivos han sido procesados y unidos!")
+    return df_processed.replace({np.nan: None, pd.NaT: None})
 
 def save_processed_data_to_supabase(df_to_save):
-    """Guarda el DataFrame procesado en la tabla 'orders' de Supabase."""
+    """Guarda el DataFrame procesado en la tabla 'orders' de Supabase con validación."""
     if df_to_save.empty:
         st.warning("No hay datos procesados para guardar en Supabase.")
         return
 
     st.subheader("Paso 3: Guardando datos en Supabase...")
 
-    final_records_to_upload = []
+    # Obtener columnas válidas de Supabase
+    valid_columns = get_valid_supabase_columns()
     
-    # Asegúrate de que 'order_id_drapify' esté en el DataFrame a guardar para el on_conflict
+    if not valid_columns:
+        st.error("❌ No se pudieron obtener las columnas válidas de Supabase.")
+        return
+    
+    st.info(f"📋 Columnas válidas en Supabase: {len(valid_columns)} encontradas")
+    
     if 'order_id_drapify' not in df_to_save.columns:
-        st.error("Error crítico: 'order_id_drapify' no se encuentra en el DataFrame final. No se puede guardar en Supabase sin una clave única.")
+        st.error("Error crítico: 'order_id_drapify' no se encuentra en el DataFrame final.")
         return
 
-    # Añadir un timestamp de la aplicación para cada registro
+    # Añadir timestamp
     df_to_save['processed_at_app'] = datetime.now()
 
+    final_records_to_upload = []
+    skipped_columns = set()
+    used_columns = set()
 
     for _, row in df_to_save.iterrows():
         record = {}
         for df_col_name, db_col_name in supabase_db_schema_mapping.items():
-            # Obtiene el valor de la fila. Si la columna no existe en el DF, .get() devuelve None por defecto.
-            value = row.get(df_col_name) 
+            # Solo procesar si la columna existe en el DataFrame
+            if df_col_name not in df_to_save.columns:
+                continue
+                
+            # Solo incluir si la columna existe en Supabase
+            if db_col_name not in valid_columns:
+                skipped_columns.add(f"{df_col_name} -> {db_col_name}")
+                continue
             
-            # Reemplazar NaN/NaT con None y convertir tipos básicos para Supabase
-            if pd.isna(value) or pd.isnull(value): # Verifica tanto para np.nan como pd.NaT
+            used_columns.add(db_col_name)
+            
+            # Obtener y procesar el valor
+            value = row.get(df_col_name)
+            
+            if pd.isna(value) or pd.isnull(value):
                 record[db_col_name] = None
             elif isinstance(value, datetime):
-                record[db_col_name] = value.isoformat() # Formato ISO para timestamps de DB
+                record[db_col_name] = value.isoformat()
             elif isinstance(value, (np.integer, int)):
                 record[db_col_name] = int(value)
             elif isinstance(value, (np.floating, float)):
                 record[db_col_name] = float(value)
             else:
-                record[db_col_name] = str(value) # Por defecto, convertir a string
+                record[db_col_name] = str(value)
 
         final_records_to_upload.append(record)
 
+    # Mostrar información sobre el procesamiento
+    if skipped_columns:
+        st.warning(f"⚠️ Columnas omitidas ({len(skipped_columns)}): {', '.join(sorted(skipped_columns))}")
+    
+    st.info(f"✅ Columnas que se insertarán ({len(used_columns)}): {', '.join(sorted(used_columns))}")
+
     try:
-        # AQUI EL CAMBIO: USAR 'orders' EN LUGAR DE 'orders_data_raw'
         response = supabase.table('orders').upsert(final_records_to_upload, on_conflict='order_id_drapify').execute()
 
         if response.data:
-            st.success(f"💾 ¡Datos guardados exitosamente en Supabase! Total de {len(response.data)} registros insertados/actualizados.")
-            # st.json(response.data) # Descomentar para ver la respuesta detallada de Supabase si es necesario
+            st.success(f"💾 ¡Datos guardados exitosamente! Total de {len(response.data)} registros.")
         else:
-            st.warning("⚠️ No se recibieron datos en la respuesta de Supabase. Esto podría indicar un problema, aunque los registros se hayan procesado.")
-            st.write(response) # Muestra la respuesta completa para depuración
+            st.warning("⚠️ No se recibieron datos en la respuesta de Supabase.")
+            st.write(response)
             
     except Exception as e:
-        st.error(f"❌ Ocurrió un error al guardar los datos en Supabase: {e}")
-        st.exception(e) # Muestra el stack trace del error
+        st.error(f"❌ Error al guardar en Supabase: {e}")
+        st.exception(e)
 
-# --- Páginas de la Aplicación Streamlit ---
+# --- Páginas de la Aplicación ---
 def page_process_files():
     st.markdown("<h1>📂 Cargar y Unir Archivos de Órdenes</h1>", unsafe_allow_html=True)
-    st.info("Sube tus archivos de Drapify, Anican Logistics, CXP y Aditionals. El sistema los leerá, limpiará y unirá toda la información en una única tabla en Supabase.")
+    st.info("Sube tus archivos de Drapify, Anican Logistics, CXP y Aditionals. El sistema los procesará y unirá en Supabase.")
 
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("Archivos Principales")
-        drapify_file = st.file_uploader("📄 DRAPIFY (Orders_XXXXXXXX)", type=["csv", "xlsx", "xls"], help="Archivo principal con las órdenes de MercadoLibre.", key="drapify_uploader")
-        anican_logistics_file = st.file_uploader("🚚 Anican Logistics", type=["csv", "xlsx", "xls"], help="Archivo con costos logísticos de Anican.", key="anican_logistics_uploader")
+        drapify_file = st.file_uploader("📄 DRAPIFY", type=["csv", "xlsx", "xls"], key="drapify_uploader")
+        anican_logistics_file = st.file_uploader("🚚 Anican Logistics", type=["csv", "xlsx", "xls"], key="anican_logistics_uploader")
 
     with col2:
         st.subheader("Archivos Auxiliares")
-        cxp_file = st.file_uploader("🇨🇱 Chile Express (CXP)", type=["csv", "xlsx", "xls"], help="Archivo de Chile Express con costos logísticos y de aduana.", key="cxp_uploader")
-        aditionals_file = st.file_uploader("➕ Anican Aditionals", type=["csv", "xlsx", "xls"], help="Archivo con costos adicionales de Anican.", key="aditionals_uploader")
+        cxp_file = st.file_uploader("🇨🇱 Chile Express (CXP)", type=["csv", "xlsx", "xls"], key="cxp_uploader")
+        aditionals_file = st.file_uploader("➕ Anican Aditionals", type=["csv", "xlsx", "xls"], key="aditionals_uploader")
 
     st.markdown("---")
+    
+    # Botón para verificar columnas
+    if st.button("🔍 Verificar Columnas de Supabase"):
+        valid_columns = get_valid_supabase_columns()
+        if valid_columns:
+            st.success(f"✅ {len(valid_columns)} columnas encontradas en 'orders'")
+            st.json(valid_columns)
+        else:
+            st.error("❌ No se pudieron obtener las columnas.")
+    
     if st.button("🚀 Procesar y Guardar en Supabase", type="primary"):
-        if drapify_file: # Drapify es el mínimo requerido para que el proceso base inicie
-            with st.spinner("Procesando y uniendo archivos... Esto puede tomar unos segundos."):
+        if drapify_file:
+            with st.spinner("Procesando archivos..."):
                 df_processed_global = process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file)
                 
                 if not df_processed_global.empty:
-                    st.session_state['df_processed'] = df_processed_global # Guarda en session_state por si se necesita después
+                    st.session_state['df_processed'] = df_processed_global
                     
-                    st.subheader("Vista Previa de Datos Unidos (Primeras 10 filas)")
+                    st.subheader("Vista Previa (Primeras 10 filas)")
                     st.dataframe(df_processed_global.head(10), use_container_width=True)
-                    st.write(f"Total de registros unidos: {len(df_processed_global)}")
+                    st.write(f"Total de registros: {len(df_processed_global)}")
 
-                    # Guarda en Supabase
                     save_processed_data_to_supabase(df_processed_global)
                 else:
-                    st.error("⚠️ No se pudo procesar los archivos. Revisa los mensajes de error/advertencia anteriores.")
+                    st.error("⚠️ No se pudo procesar los archivos.")
         else:
-            st.warning("Por favor, carga al menos el archivo DRAPIFY para iniciar el procesamiento.")
+            st.warning("Por favor, carga al menos el archivo DRAPIFY.")
 
 def page_view_data():
-    st.markdown("<h1>📊 Ver Datos Consolidados en Supabase</h1>", unsafe_allow_html=True)
-    st.info("Aquí puedes revisar los datos que han sido cargados y consolidados en tu base de datos Supabase.")
+    st.markdown("<h1>📊 Ver Datos Consolidados</h1>", unsafe_allow_html=True)
+    st.info("Datos cargados y consolidados en Supabase.")
 
-    if st.button("🔄 Cargar Datos Recientes de Supabase"):
-        st.cache_data.clear() # Limpia la caché para obtener los datos más recientes
-        st.rerun() # Recarga la página para mostrar los datos actualizados
+    if st.button("🔄 Cargar Datos Recientes"):
+        st.cache_data.clear()
+        st.rerun()
 
     try:
-        # AQUI EL CAMBIO: USAR 'orders' EN LUGAR DE 'orders_data_raw'
-        response = supabase.table('orders').select('*').limit(500).order('order_id_drapify', desc=True).execute() 
+        response = supabase.table('orders').select('*').limit(500).order('order_id_drapify', desc=True).execute()
         
         if response.data:
             df_db = pd.DataFrame(response.data)
-            st.success(f"✅ Se cargaron {len(df_db)} registros de Supabase.")
+            st.success(f"✅ {len(df_db)} registros cargados.")
             st.dataframe(df_db, use_container_width=True)
         else:
-            st.info("ℹ️ No hay datos disponibles en la tabla 'orders' de Supabase aún. ¡Carga algunos archivos primero!")
+            st.info("ℹ️ No hay datos en 'orders' aún.")
     except Exception as e:
-        st.error(f"❌ Error al cargar datos de Supabase: {e}")
-        st.warning("Asegúrate de que la tabla 'orders' exista en tu base de datos Supabase y que las claves de acceso sean correctas.")
+        st.error(f"❌ Error al cargar datos: {e}")
 
+def page_debug_schema():
+    st.markdown("<h1>🔧 Depuración de Schema</h1>", unsafe_allow_html=True)
+    
+    if st.button("🔍 Verificar tabla 'orders'"):
+        valid_columns = get_valid_supabase_columns()
+        if valid_columns:
+            st.success(f"✅ Tabla existe con {len(valid_columns)} columnas")
+            for i, col in enumerate(sorted(valid_columns), 1):
+                st.write(f"{i}. {col}")
+        else:
+            st.error("❌ La tabla 'orders' no existe o está vacía")
+            st.info("Ejecuta el SQL para crear las columnas en el SQL Editor de Supabase")
 
-# --- Lógica principal de la aplicación ---
+    st.subheader("Mapeo de Columnas")
+    st.write("Mapeo definido en el código:")
+    for df_col, db_col in supabase_db_schema_mapping.items():
+        st.write(f"• {df_col} → {db_col}")
+
+    if st.button("📋 Comparar Mapeo vs Supabase"):
+        valid_columns = get_valid_supabase_columns()
+        if valid_columns:
+            missing_columns = []
+            existing_columns = []
+            
+            for df_col, db_col in supabase_db_schema_mapping.items():
+                if db_col in valid_columns:
+                    existing_columns.append(db_col)
+                else:
+                    missing_columns.append(db_col)
+            
+            if missing_columns:
+                st.error(f"❌ Columnas faltantes ({len(missing_columns)}):")
+                for col in sorted(missing_columns):
+                    st.write(f"• {col}")
+            
+            if existing_columns:
+                st.success(f"✅ Columnas existentes ({len(existing_columns)}):")
+                for col in sorted(existing_columns):
+                    st.write(f"• {col}")
+
+# --- Lógica principal ---
 st.sidebar.title("Navegación del Sistema")
-page_selection = st.sidebar.radio("Elige una opción:", ["📂 Cargar y Unir Archivos", "📊 Ver Datos Consolidados"])
+page_selection = st.sidebar.radio("Elige una opción:", [
+    "📂 Cargar y Unir Archivos", 
+    "📊 Ver Datos Consolidados",
+    "🔧 Depuración de Schema"
+])
 
 if page_selection == "📂 Cargar y Unir Archivos":
     page_process_files()
 elif page_selection == "📊 Ver Datos Consolidados":
     page_view_data()
+elif page_selection == "🔧 Depuración de Schema":
+    page_debug_schema()
