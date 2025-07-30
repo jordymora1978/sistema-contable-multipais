@@ -37,14 +37,14 @@ supabase: Client = init_supabase_client()
 # --- Función para obtener columnas válidas de Supabase ---
 @st.cache_data(ttl=300)
 def get_valid_supabase_columns():
-    """Obtiene las columnas válidas de la tabla 'orders' usando information_schema."""
+    """Obtiene las columnas válidas de la tabla 'orders'."""
     try:
-        # Método 1: Intentar SELECT directo
+        # Intentar SELECT directo
         result = supabase.table('orders').select('*').limit(1).execute()
         if result.data and len(result.data) > 0:
             return list(result.data[0].keys())
         
-        # Método 2: Si la tabla está vacía, retornar las columnas que sabemos que existen
+        # Si la tabla está vacía, retornar las columnas que sabemos que existen
         return [
             'id', 'created_at', 'order_id_drapify', 'system_hash', 'serial_hash',
             'account_name', 'date_created', 'quantity_drapify', 'logistic_type',
@@ -377,7 +377,7 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
     return df_processed.replace({np.nan: None, pd.NaT: None})
 
 def save_processed_data_to_supabase(df_to_save):
-    """Guarda el DataFrame procesado en la tabla 'orders' de Supabase con validación."""
+    """Guarda el DataFrame procesado en la tabla 'orders' de Supabase con validación y eliminación de duplicados."""
     if df_to_save.empty:
         st.warning("No hay datos procesados para guardar en Supabase.")
         return
@@ -434,17 +434,37 @@ def save_processed_data_to_supabase(df_to_save):
 
         final_records_to_upload.append(record)
 
+    # Eliminar duplicados basados en order_id_drapify
+    seen_ids = set()
+    unique_records = []
+    duplicates_count = 0
+    
+    for record in final_records_to_upload:
+        order_id = record.get('order_id_drapify')
+        if order_id and order_id not in seen_ids:
+            seen_ids.add(order_id)
+            unique_records.append(record)
+        else:
+            duplicates_count += 1
+
+    final_records_to_upload = unique_records
+
     # Mostrar información sobre el procesamiento
     if skipped_columns:
         st.warning(f"⚠️ Columnas omitidas ({len(skipped_columns)}): {', '.join(sorted(skipped_columns))}")
     
+    if duplicates_count > 0:
+        st.warning(f"⚠️ Registros duplicados omitidos: {duplicates_count}")
+    
     st.info(f"✅ Columnas que se insertarán ({len(used_columns)}): {', '.join(sorted(used_columns))}")
+    st.info(f"📊 Registros únicos a insertar: {len(final_records_to_upload)}")
 
     try:
-        response = supabase.table('orders').upsert(final_records_to_upload, on_conflict='order_id_drapify').execute()
+        # Usar INSERT en lugar de UPSERT para evitar problemas de duplicados
+        response = supabase.table('orders').insert(final_records_to_upload).execute()
 
         if response.data:
-            st.success(f"💾 ¡Datos guardados exitosamente! Total de {len(response.data)} registros.")
+            st.success(f"💾 ¡Datos guardados exitosamente! Total de {len(response.data)} registros insertados.")
         else:
             st.warning("⚠️ No se recibieron datos en la respuesta de Supabase.")
             st.write(response)
@@ -508,7 +528,10 @@ def page_view_data():
         st.rerun()
 
     try:
-        response = supabase.table('orders').select('*').limit(500).order('order_id_drapify', desc=True).execute()
+        response = supabase.table('orders').select('*').limit(500).order('created_at', desc=True).execute()
+        
+    try:
+        response = supabase.table('orders').select('*').limit(500).order('created_at', desc=True).execute()
         
         if response.data:
             df_db = pd.DataFrame(response.data)
@@ -559,13 +582,76 @@ def page_debug_schema():
                 for col in sorted(existing_columns):
                     st.write(f"• {col}")
 
+    # Sección de información útil
+    st.subheader("🛠️ Información del Sistema")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Estado de la conexión:**")
+        try:
+            test_response = supabase.table('orders').select('id').limit(1).execute()
+            st.success("✅ Conexión a Supabase OK")
+        except Exception as e:
+            st.error(f"❌ Error de conexión: {e}")
+    
+    with col2:
+        st.write("**Archivos soportados:**")
+        st.write("• CSV (.csv)")
+        st.write("• Excel (.xlsx, .xls)")
+        
+    # Mostrar estadísticas de los datos
+    if st.button("📊 Estadísticas de Datos"):
+        try:
+            # Contar registros totales
+            count_response = supabase.table('orders').select('id', count='exact').execute()
+            total_records = count_response.count if count_response.count else 0
+            
+            # Obtener registros recientes
+            recent_response = supabase.table('orders').select('processed_at_app').order('processed_at_app', desc=True).limit(10).execute()
+            
+            st.info(f"📈 Total de registros en la base de datos: {total_records}")
+            
+            if recent_response.data:
+                st.info(f"📅 Último procesamiento: {recent_response.data[0]['processed_at_app']}")
+            
+        except Exception as e:
+            st.error(f"Error al obtener estadísticas: {e}")
+
 # --- Lógica principal ---
-st.sidebar.title("Navegación del Sistema")
-page_selection = st.sidebar.radio("Elige una opción:", [
+st.sidebar.title("🏢 Sistema Contable Multi-País")
+st.sidebar.markdown("---")
+
+# Información del sistema en el sidebar
+st.sidebar.markdown("### 📋 Estado del Sistema")
+try:
+    test_connection = supabase.table('orders').select('id').limit(1).execute()
+    st.sidebar.success("🟢 Conectado a Supabase")
+except:
+    st.sidebar.error("🔴 Error de conexión")
+
+st.sidebar.markdown("### 🎯 Fase Actual")
+st.sidebar.info("**FASE 1:** Consolidación de Datos")
+st.sidebar.markdown("""
+**Objetivo:** Unificar datos de múltiples fuentes:
+- 📄 DRAPIFY (base)
+- 🚚 Anican Logistics  
+- 🇨🇱 Chile Express (CXP)
+- ➕ Aditionals
+""")
+
+st.sidebar.markdown("---")
+
+page_selection = st.sidebar.radio("🧭 Navegación:", [
     "📂 Cargar y Unir Archivos", 
     "📊 Ver Datos Consolidados",
     "🔧 Depuración de Schema"
 ])
+
+# Footer del sidebar
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🚀 Próximamente")
+st.sidebar.markdown("**FASE 2:** Fórmulas y Cálculos Financieros")
 
 if page_selection == "📂 Cargar y Unir Archivos":
     page_process_files()
@@ -573,32 +659,3 @@ elif page_selection == "📊 Ver Datos Consolidados":
     page_view_data()
 elif page_selection == "🔧 Depuración de Schema":
     page_debug_schema()
-
-def bypass_validation_and_save(df_to_save):
-    """Función temporal para guardar sin validación de columnas."""
-    if df_to_save.empty:
-        st.warning("No hay datos procesados para guardar.")
-        return
-
-    df_to_save['processed_at_app'] = datetime.now()
-    
-    final_records = []
-    for _, row in df_to_save.iterrows():
-        record = {}
-        for df_col_name, db_col_name in supabase_db_schema_mapping.items():
-            if df_col_name in df_to_save.columns:
-                value = row.get(df_col_name)
-                if pd.isna(value):
-                    record[db_col_name] = None
-                else:
-                    record[db_col_name] = str(value)
-        final_records.append(record)
-    
-    try:
-        response = supabase.table('orders').upsert(final_records, on_conflict='order_id_drapify').execute()
-        if response.data:
-            st.success(f"💾 ¡{len(response.data)} registros guardados!")
-        else:
-            st.warning("⚠️ No se recibieron datos en la respuesta.")
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
