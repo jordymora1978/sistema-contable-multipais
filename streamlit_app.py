@@ -574,3 +574,32 @@ elif page_selection == "📊 Ver Datos Consolidados":
     page_view_data()
 elif page_selection == "🔧 Depuración de Schema":
     page_debug_schema()
+
+def bypass_validation_and_save(df_to_save):
+    """Función temporal para guardar sin validación de columnas."""
+    if df_to_save.empty:
+        st.warning("No hay datos procesados para guardar.")
+        return
+
+    df_to_save['processed_at_app'] = datetime.now()
+    
+    final_records = []
+    for _, row in df_to_save.iterrows():
+        record = {}
+        for df_col_name, db_col_name in supabase_db_schema_mapping.items():
+            if df_col_name in df_to_save.columns:
+                value = row.get(df_col_name)
+                if pd.isna(value):
+                    record[db_col_name] = None
+                else:
+                    record[db_col_name] = str(value)
+        final_records.append(record)
+    
+    try:
+        response = supabase.table('orders').upsert(final_records, on_conflict='order_id_drapify').execute()
+        if response.data:
+            st.success(f"💾 ¡{len(response.data)} registros guardados!")
+        else:
+            st.warning("⚠️ No se recibieron datos en la respuesta.")
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
