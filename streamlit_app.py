@@ -459,4 +459,155 @@ def save_processed_data_to_supabase(df_to_save):
 
     # Mostrar información sobre columnas procesadas
     if skipped_columns:
-        st.warning(f"⚠️ Columnas omitidas (no existen en Supabase): {', '.join(sorted(skipped_columns
+        st.warning(f"⚠️ Columnas omitidas (no existen en Supabase): {', '.join(sorted(skipped_columns))}")
+    
+    st.info(f"✅ Columnas que se insertarán: {', '.join(sorted(used_columns))}")
+
+    try:
+        response = supabase.table('orders').upsert(final_records_to_upload, on_conflict='order_id_drapify').execute()
+
+        if response.data:
+            st.success(f"💾 ¡Datos guardados exitosamente en Supabase! Total de {len(response.data)} registros insertados/actualizados.")
+        else:
+            st.warning("⚠️ No se recibieron datos en la respuesta de Supabase. Esto podría indicar un problema, aunque los registros se hayan procesado.")
+            st.write(response)
+            
+    except Exception as e:
+        st.error(f"❌ Ocurrió un error al guardar los datos en Supabase: {e}")
+        st.exception(e)
+
+# --- Páginas de la Aplicación Streamlit ---
+def page_process_files():
+    st.markdown("<h1>📂 Cargar y Unir Archivos de Órdenes</h1>", unsafe_allow_html=True)
+    st.info("Sube tus archivos de Drapify, Anican Logistics, CXP y Aditionals. El sistema los leerá, limpiará y unirá toda la información en una única tabla en Supabase.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Archivos Principales")
+        drapify_file = st.file_uploader("📄 DRAPIFY (Orders_XXXXXXXX)", type=["csv", "xlsx", "xls"], help="Archivo principal con las órdenes de MercadoLibre.", key="drapify_uploader")
+        anican_logistics_file = st.file_uploader("🚚 Anican Logistics", type=["csv", "xlsx", "xls"], help="Archivo con costos logísticos de Anican.", key="anican_logistics_uploader")
+
+    with col2:
+        st.subheader("Archivos Auxiliares")
+        cxp_file = st.file_uploader("🇨🇱 Chile Express (CXP)", type=["csv", "xlsx", "xls"], help="Archivo de Chile Express con costos logísticos y de aduana.", key="cxp_uploader")
+        aditionals_file = st.file_uploader("➕ Anican Aditionals", type=["csv", "xlsx", "xls"], help="Archivo con costos adicionales de Anican.", key="aditionals_uploader")
+
+    st.markdown("---")
+    
+    # Botón para verificar columnas de Supabase
+    if st.button("🔍 Verificar Columnas de Supabase", help="Verifica qué columnas existen en tu tabla 'orders' de Supabase"):
+        valid_columns = get_valid_supabase_columns()
+        if valid_columns:
+            st.success(f"✅ Conexión exitosa. Columnas encontradas en la tabla 'orders': {len(valid_columns)}")
+            st.json(valid_columns)
+        else:
+            st.error("❌ No se pudieron obtener las columnas de Supabase. Verifica la conexión.")
+    
+    if st.button("🚀 Procesar y Guardar en Supabase", type="primary"):
+        if drapify_file:
+            with st.spinner("Procesando y uniendo archivos... Esto puede tomar unos segundos."):
+                df_processed_global = process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file)
+                
+                if not df_processed_global.empty:
+                    st.session_state['df_processed'] = df_processed_global
+                    
+                    st.subheader("Vista Previa de Datos Unidos (Primeras 10 filas)")
+                    st.dataframe(df_processed_global.head(10), use_container_width=True)
+                    st.write(f"Total de registros unidos: {len(df_processed_global)}")
+
+                    # Guarda en Supabase
+                    save_processed_data_to_supabase(df_processed_global)
+                else:
+                    st.error("⚠️ No se pudo procesar los archivos. Revisa los mensajes de error/advertencia anteriores.")
+        else:
+            st.warning("Por favor, carga al menos el archivo DRAPIFY para iniciar el procesamiento.")
+
+def page_view_data():
+    st.markdown("<h1>📊 Ver Datos Consolidados en Supabase</h1>", unsafe_allow_html=True)
+    st.info("Aquí puedes revisar los datos que han sido cargados y consolidados en tu base de datos Supabase.")
+
+    if st.button("🔄 Cargar Datos Recientes de Supabase"):
+        st.cache_data.clear()
+        st.rerun()
+
+    try:
+        response = supabase.table('orders').select('*').limit(500).order('order_id_drapify', desc=True).execute() 
+        
+        if response.data:
+            df_db = pd.DataFrame(response.data)
+            st.success(f"✅ Se cargaron {len(df_db)} registros de Supabase.")
+            st.dataframe(df_db, use_container_width=True)
+        else:
+            st.info("ℹ️ No hay datos disponibles en la tabla 'orders' de Supabase aún. ¡Carga algunos archivos primero!")
+    except Exception as e:
+        st.error(f"❌ Error al cargar datos de Supabase: {e}")
+        st.warning("Asegúrate de que la tabla 'orders' exista en tu base de datos Supabase y que las claves de acceso sean correctas.")
+
+def page_debug_schema():
+    st.markdown("<h1>🔧 Depuración de Schema</h1>", unsafe_allow_html=True)
+    st.info("Herramientas para depurar problemas de schema y columnas.")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Columnas en Supabase")
+        if st.button("🔍 Obtener Columnas de Supabase"):
+            valid_columns = get_valid_supabase_columns()
+            if valid_columns:
+                st.success(f"✅ {len(valid_columns)} columnas encontradas:")
+                for col in sorted(valid_columns):
+                    st.write(f"• {col}")
+            else:
+                st.error("❌ No se pudieron obtener las columnas")
+    
+    with col2:
+        st.subheader("Mapeo de Columnas")
+        st.write("Mapeo definido en el código:")
+        for df_col, db_col in supabase_db_schema_mapping.items():
+            st.write(f"• {df_col} → {db_col}")
+    
+    st.subheader("Verificar Columnas Faltantes")
+    if st.button("📋 Comparar Mapeo vs Supabase"):
+        valid_columns = get_valid_supabase_columns()
+        if valid_columns:
+            missing_columns = []
+            existing_columns = []
+            
+            for df_col, db_col in supabase_db_schema_mapping.items():
+                if db_col in valid_columns:
+                    existing_columns.append(db_col)
+                else:
+                    missing_columns.append(db_col)
+            
+            if missing_columns:
+                st.error(f"❌ Columnas faltantes en Supabase ({len(missing_columns)}):")
+                for col in sorted(missing_columns):
+                    st.write(f"• {col}")
+                    
+                st.subheader("SQL para crear columnas faltantes:")
+                sql_commands = []
+                for col in missing_columns:
+                    sql_commands.append(f"ALTER TABLE orders ADD COLUMN {col} TEXT;")
+                
+                st.code("\n".join(sql_commands), language="sql")
+            
+            if existing_columns:
+                st.success(f"✅ Columnas existentes ({len(existing_columns)}):")
+                for col in sorted(existing_columns):
+                    st.write(f"• {col}")
+
+# --- Lógica principal de la aplicación ---
+st.sidebar.title("Navegación del Sistema")
+page_selection = st.sidebar.radio("Elige una opción:", [
+    "📂 Cargar y Unir Archivos", 
+    "📊 Ver Datos Consolidados",
+    "🔧 Depuración de Schema"
+])
+
+if page_selection == "📂 Cargar y Unir Archivos":
+    page_process_files()
+elif page_selection == "📊 Ver Datos Consolidados":
+    page_view_data()
+elif page_selection == "🔧 Depuración de Schema":
+    page_debug_schema()
