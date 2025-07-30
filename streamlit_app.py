@@ -37,25 +37,10 @@ def init_supabase_client():
 
 supabase: Client = init_supabase_client()
 
-# --- Función para obtener columnas válidas de Supabase ---
-@st.cache_data(ttl=300)  # Cache por 5 minutos
-def get_valid_supabase_columns():
-    """Obtiene las columnas válidas de la tabla 'orders' en Supabase."""
-    try:
-        # Hacer una query simple para obtener la estructura
-        result = supabase.table('orders').select('*').limit(1).execute()
-        if result.data and len(result.data) > 0:
-            return list(result.data[0].keys())
-        else:
-            # Si no hay datos, intentar con describe o information_schema
-            return []
-    except Exception as e:
-        st.error(f"Error al obtener columnas de Supabase: {e}")
-        return []
-
-# --- Mapeo de columnas para Supabase (CORREGIDO) ---
+# --- Mapeo de columnas para Supabase ---
 # Este diccionario define cómo las columnas del DataFrame procesado (clave)
 # se mapearán a los nombres de las columnas en tu tabla de Supabase (valor).
+# ES CRUCIAL QUE LOS VALORES (nombres de la DB) COINCIDAN EXACTAMENTE CON TU ESQUEMA EN SUPABASE.
 supabase_db_schema_mapping = {
     # Columnas de DRAPIFY (ya con nombres estandarizados)
     'system_hash': 'system_hash',
@@ -73,27 +58,27 @@ supabase_db_schema_mapping = {
     'refunded_date': 'refunded_date',
 
     # Columnas de ANICAN LOGISTICS (ya con nombres estandarizados)
-    'order_number_anican': 'order_number_anican',
+    'order_number_anican': 'order_number_anican', # <-- AQUI SE ASEGURA ESTE NOMBRE
     'reference_anican': 'reference_anican', # Clave de unión con Drapify
     'fob': 'fob',
     'insurance': 'insurance',
-    'logistics_anican_value': 'logistics_anican',
+    'logistics_anican': 'logistics_anican',
     'duties_prealert': 'duties_prealert',
     'duties_pay': 'duties_pay',
     'duty_fee': 'duty_fee',
     'saving': 'saving',
-    'total_anican_value': 'total_anican',
-    'external_id_anican': 'external_id',
+    'total_anican': 'total_anican',
+    'external_id': 'external_id',
 
-    # Columnas de CXP (CORREGIDAS)
-    'date': 'date_cxp',
-    'ref_hash': 'ref_hash_cxp', # Clave de unión con Asignacion
+    # Columnas de CXP (ya con nombres estandarizados)
+    'date_cxp': 'date_cxp',
+    'ref_hash_cxp': 'ref_hash_cxp', # Clave de unión con Asignacion
     'co_aereo': 'co_aereo',
-    'arancel': 'arancel_cxp',
-    'iva': 'iva_cxp',
+    'arancel_cxp': 'arancel_cxp',
+    'iva_cxp': 'iva_cxp',
     'handling': 'handling',
     'dest_delivery': 'dest_delivery',
-    'amt_due': 'amt_due_cxp',  # CORREGIDO: era 'amt_due_cxp': 'amt_due_cxp'
+    'amt_due_cxp': 'amt_due_cxp',
     'goods_value': 'goods_value',
 
     # Columnas de ADITIONALS (ya con nombres estandarizados)
@@ -269,7 +254,7 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
         if df_anican_raw is not None:
             # --- RENOMBRADO EXPLÍCITO DE COLUMNAS CLAVE DE ANICAN LOGISTICS AQUÍ ---
             anican_renames = {
-                'Order number': 'Order_Number_Anican',
+                'Order number': 'Order_Number_Anican', # <--- ¡CAMBIO CLAVE AQUÍ!
                 'Reference': 'Reference_Anican', # Esta es la clave de unión con Drapify
                 'FOB': 'FOB', 'Insurance': 'Insurance',
                 'Logistics': 'Logistics_Anican_Value',
@@ -287,7 +272,7 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
             df_anican = limpiar_nombres_columnas_generico(df_anican)
 
             # Asegurar que las claves de unión y otras cols importantes sean string y limpias
-            for col in ['order_number_anican', 'reference_anican', 'external_id_anican']:
+            for col in ['order_number_anican', 'reference_anican', 'external_id_anican']: # <-- AQUI YA ES 'order_number_anican'
                 if col in df_anican.columns:
                     df_anican[col] = df_anican[col].astype(str).str.strip()
             # Convertir a numérico las columnas que deben serlo
@@ -398,21 +383,14 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
     return df_processed.replace({np.nan: None, pd.NaT: None}) 
 
 def save_processed_data_to_supabase(df_to_save):
-    """Guarda el DataFrame procesado en la tabla 'orders' de Supabase con validación de columnas."""
+    """Guarda el DataFrame procesado en la tabla 'orders' de Supabase."""
     if df_to_save.empty:
         st.warning("No hay datos procesados para guardar en Supabase.")
         return
 
     st.subheader("Paso 3: Guardando datos en Supabase...")
 
-    # Obtener columnas válidas de Supabase
-    valid_columns = get_valid_supabase_columns()
-    
-    if not valid_columns:
-        st.error("❌ No se pudieron obtener las columnas válidas de Supabase. Verifica la conexión y que la tabla 'orders' exista.")
-        return
-    
-    st.info(f"📋 Columnas válidas en Supabase: {', '.join(valid_columns)}")
+    final_records_to_upload = []
     
     # Asegúrate de que 'order_id_drapify' esté en el DataFrame a guardar para el on_conflict
     if 'order_id_drapify' not in df_to_save.columns:
@@ -422,59 +400,41 @@ def save_processed_data_to_supabase(df_to_save):
     # Añadir un timestamp de la aplicación para cada registro
     df_to_save['processed_at_app'] = datetime.now()
 
-    final_records_to_upload = []
-    skipped_columns = set()
-    used_columns = set()
 
     for _, row in df_to_save.iterrows():
         record = {}
         for df_col_name, db_col_name in supabase_db_schema_mapping.items():
-            # Solo procesar si la columna existe en el DataFrame
-            if df_col_name not in df_to_save.columns:
-                continue
-                
-            # Solo incluir si la columna existe en Supabase
-            if db_col_name not in valid_columns:
-                skipped_columns.add(f"{df_col_name} -> {db_col_name}")
-                continue
-            
-            used_columns.add(db_col_name)
-            
-            # Obtiene el valor de la fila
+            # Obtiene el valor de la fila. Si la columna no existe en el DF, .get() devuelve None por defecto.
             value = row.get(df_col_name) 
             
             # Reemplazar NaN/NaT con None y convertir tipos básicos para Supabase
-            if pd.isna(value) or pd.isnull(value):
+            if pd.isna(value) or pd.isnull(value): # Verifica tanto para np.nan como pd.NaT
                 record[db_col_name] = None
             elif isinstance(value, datetime):
-                record[db_col_name] = value.isoformat()
+                record[db_col_name] = value.isoformat() # Formato ISO para timestamps de DB
             elif isinstance(value, (np.integer, int)):
                 record[db_col_name] = int(value)
             elif isinstance(value, (np.floating, float)):
                 record[db_col_name] = float(value)
             else:
-                record[db_col_name] = str(value)
+                record[db_col_name] = str(value) # Por defecto, convertir a string
 
         final_records_to_upload.append(record)
 
-    # Mostrar información sobre columnas procesadas
-    if skipped_columns:
-        st.warning(f"⚠️ Columnas omitidas (no existen en Supabase): {', '.join(sorted(skipped_columns))}")
-    
-    st.info(f"✅ Columnas que se insertarán: {', '.join(sorted(used_columns))}")
-
     try:
+        # AQUI EL CAMBIO: USAR 'orders' EN LUGAR DE 'orders_data_raw'
         response = supabase.table('orders').upsert(final_records_to_upload, on_conflict='order_id_drapify').execute()
 
         if response.data:
             st.success(f"💾 ¡Datos guardados exitosamente en Supabase! Total de {len(response.data)} registros insertados/actualizados.")
+            # st.json(response.data) # Descomentar para ver la respuesta detallada de Supabase si es necesario
         else:
             st.warning("⚠️ No se recibieron datos en la respuesta de Supabase. Esto podría indicar un problema, aunque los registros se hayan procesado.")
-            st.write(response)
+            st.write(response) # Muestra la respuesta completa para depuración
             
     except Exception as e:
         st.error(f"❌ Ocurrió un error al guardar los datos en Supabase: {e}")
-        st.exception(e)
+        st.exception(e) # Muestra el stack trace del error
 
 # --- Páginas de la Aplicación Streamlit ---
 def page_process_files():
@@ -494,23 +454,13 @@ def page_process_files():
         aditionals_file = st.file_uploader("➕ Anican Aditionals", type=["csv", "xlsx", "xls"], help="Archivo con costos adicionales de Anican.", key="aditionals_uploader")
 
     st.markdown("---")
-    
-    # Botón para verificar columnas de Supabase
-    if st.button("🔍 Verificar Columnas de Supabase", help="Verifica qué columnas existen en tu tabla 'orders' de Supabase"):
-        valid_columns = get_valid_supabase_columns()
-        if valid_columns:
-            st.success(f"✅ Conexión exitosa. Columnas encontradas en la tabla 'orders': {len(valid_columns)}")
-            st.json(valid_columns)
-        else:
-            st.error("❌ No se pudieron obtener las columnas de Supabase. Verifica la conexión.")
-    
     if st.button("🚀 Procesar y Guardar en Supabase", type="primary"):
-        if drapify_file:
+        if drapify_file: # Drapify es el mínimo requerido para que el proceso base inicie
             with st.spinner("Procesando y uniendo archivos... Esto puede tomar unos segundos."):
                 df_processed_global = process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file)
                 
                 if not df_processed_global.empty:
-                    st.session_state['df_processed'] = df_processed_global
+                    st.session_state['df_processed'] = df_processed_global # Guarda en session_state por si se necesita después
                     
                     st.subheader("Vista Previa de Datos Unidos (Primeras 10 filas)")
                     st.dataframe(df_processed_global.head(10), use_container_width=True)
@@ -528,10 +478,11 @@ def page_view_data():
     st.info("Aquí puedes revisar los datos que han sido cargados y consolidados en tu base de datos Supabase.")
 
     if st.button("🔄 Cargar Datos Recientes de Supabase"):
-        st.cache_data.clear()
-        st.rerun()
+        st.cache_data.clear() # Limpia la caché para obtener los datos más recientes
+        st.rerun() # Recarga la página para mostrar los datos actualizados
 
     try:
+        # AQUI EL CAMBIO: USAR 'orders' EN LUGAR DE 'orders_data_raw'
         response = supabase.table('orders').select('*').limit(500).order('order_id_drapify', desc=True).execute() 
         
         if response.data:
@@ -544,70 +495,12 @@ def page_view_data():
         st.error(f"❌ Error al cargar datos de Supabase: {e}")
         st.warning("Asegúrate de que la tabla 'orders' exista en tu base de datos Supabase y que las claves de acceso sean correctas.")
 
-def page_debug_schema():
-    st.markdown("<h1>🔧 Depuración de Schema</h1>", unsafe_allow_html=True)
-    st.info("Herramientas para depurar problemas de schema y columnas.")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Columnas en Supabase")
-        if st.button("🔍 Obtener Columnas de Supabase"):
-            valid_columns = get_valid_supabase_columns()
-            if valid_columns:
-                st.success(f"✅ {len(valid_columns)} columnas encontradas:")
-                for col in sorted(valid_columns):
-                    st.write(f"• {col}")
-            else:
-                st.error("❌ No se pudieron obtener las columnas")
-    
-    with col2:
-        st.subheader("Mapeo de Columnas")
-        st.write("Mapeo definido en el código:")
-        for df_col, db_col in supabase_db_schema_mapping.items():
-            st.write(f"• {df_col} → {db_col}")
-    
-    st.subheader("Verificar Columnas Faltantes")
-    if st.button("📋 Comparar Mapeo vs Supabase"):
-        valid_columns = get_valid_supabase_columns()
-        if valid_columns:
-            missing_columns = []
-            existing_columns = []
-            
-            for df_col, db_col in supabase_db_schema_mapping.items():
-                if db_col in valid_columns:
-                    existing_columns.append(db_col)
-                else:
-                    missing_columns.append(db_col)
-            
-            if missing_columns:
-                st.error(f"❌ Columnas faltantes en Supabase ({len(missing_columns)}):")
-                for col in sorted(missing_columns):
-                    st.write(f"• {col}")
-                    
-                st.subheader("SQL para crear columnas faltantes:")
-                sql_commands = []
-                for col in missing_columns:
-                    sql_commands.append(f"ALTER TABLE orders ADD COLUMN {col} TEXT;")
-                
-                st.code("\n".join(sql_commands), language="sql")
-            
-            if existing_columns:
-                st.success(f"✅ Columnas existentes ({len(existing_columns)}):")
-                for col in sorted(existing_columns):
-                    st.write(f"• {col}")
 
 # --- Lógica principal de la aplicación ---
 st.sidebar.title("Navegación del Sistema")
-page_selection = st.sidebar.radio("Elige una opción:", [
-    "📂 Cargar y Unir Archivos", 
-    "📊 Ver Datos Consolidados",
-    "🔧 Depuración de Schema"
-])
+page_selection = st.sidebar.radio("Elige una opción:", ["📂 Cargar y Unir Archivos", "📊 Ver Datos Consolidados"])
 
 if page_selection == "📂 Cargar y Unir Archivos":
     page_process_files()
 elif page_selection == "📊 Ver Datos Consolidados":
     page_view_data()
-elif page_selection == "🔧 Depuración de Schema":
-    page_debug_schema()
