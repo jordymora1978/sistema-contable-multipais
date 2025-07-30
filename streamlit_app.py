@@ -19,6 +19,9 @@ st.set_page_config(
 def init_supabase_client():
     """Inicializa la conexión con Supabase, usando st.secrets o valores de fallback."""
     try:
+        # Intenta cargar desde st.secrets.
+        # Si estas líneas causan un KeyError, significa que st.secrets no está configurado.
+        # En ese caso, se usarán las claves directamente codificadas (MENOS SEGURO PARA PRODUCCIÓN).
         url = st.secrets.get("supabase", {}).get("url", "https://qzexuqkedukcwcyhrpza.supabase.co")
         key = st.secrets.get("supabase", {}).get("key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0")
         
@@ -380,7 +383,7 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
     return df_processed.replace({np.nan: None, pd.NaT: None}) 
 
 def save_processed_data_to_supabase(df_to_save):
-    """Guarda el DataFrame procesado en la tabla 'orders_data_raw' de Supabase."""
+    """Guarda el DataFrame procesado en la tabla 'orders' de Supabase."""
     if df_to_save.empty:
         st.warning("No hay datos procesados para guardar en Supabase.")
         return
@@ -391,116 +394,4 @@ def save_processed_data_to_supabase(df_to_save):
     
     # Asegúrate de que 'order_id_drapify' esté en el DataFrame a guardar para el on_conflict
     if 'order_id_drapify' not in df_to_save.columns:
-        st.error("Error crítico: 'order_id_drapify' no se encuentra en el DataFrame final. No se puede guardar en Supabase sin una clave única.")
-        return
-
-    # Añadir un timestamp de la aplicación para cada registro
-    df_to_save['processed_at_app'] = datetime.now()
-
-
-    for _, row in df_to_save.iterrows():
-        record = {}
-        for df_col_name, db_col_name in supabase_db_schema_mapping.items():
-            # Obtiene el valor de la fila. Si la columna no existe en el DF, .get() devuelve None por defecto.
-            value = row.get(df_col_name) 
-            
-            # Reemplazar NaN/NaT con None y convertir tipos básicos para Supabase
-            if pd.isna(value) or pd.isnull(value): # Verifica tanto para np.nan como pd.NaT
-                record[db_col_name] = None
-            elif isinstance(value, datetime):
-                record[db_col_name] = value.isoformat() # Formato ISO para timestamps de DB
-            elif isinstance(value, (np.integer, int)):
-                record[db_col_name] = int(value)
-            elif isinstance(value, (np.floating, float)):
-                record[db_col_name] = float(value)
-            else:
-                record[db_col_name] = str(value) # Por defecto, convertir a string
-
-        final_records_to_upload.append(record)
-
-    try:
-        # Usa el nombre de tabla que ya tienes en Supabase, por ejemplo 'orders_data_raw'
-        # Asegúrate de que 'order_id_drapify' es la clave primaria o única en tu tabla 'orders_data_raw'
-        # para que el upsert funcione correctamente.
-        response = supabase.table('orders_data_raw').upsert(final_records_to_upload, on_conflict='order_id_drapify').execute()
-
-        if response.data:
-            st.success(f"💾 ¡Datos guardados exitosamente en Supabase! Total de {len(response.data)} registros insertados/actualizados.")
-            # st.json(response.data) # Descomentar para ver la respuesta detallada de Supabase si es necesario
-        else:
-            st.warning("⚠️ No se recibieron datos en la respuesta de Supabase. Esto podría indicar un problema, aunque los registros se hayan procesado.")
-            st.write(response) # Muestra la respuesta completa para depuración
-            
-    except Exception as e:
-        st.error(f"❌ Ocurrió un error al guardar los datos en Supabase: {e}")
-        st.exception(e) # Muestra el stack trace del error
-
-# --- Páginas de la Aplicación Streamlit ---
-def page_process_files():
-    st.markdown("<h1>📂 Cargar y Unir Archivos de Órdenes</h1>", unsafe_allow_html=True)
-    st.info("Sube tus archivos de Drapify, Anican Logistics, CXP y Aditionals. El sistema los leerá, limpiará y unirá toda la información en una única tabla en Supabase.")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Archivos Principales")
-        drapify_file = st.file_uploader("📄 DRAPIFY (Orders_XXXXXXXX)", type=["csv", "xlsx", "xls"], help="Archivo principal con las órdenes de MercadoLibre.", key="drapify_uploader")
-        anican_logistics_file = st.file_uploader("🚚 Anican Logistics", type=["csv", "xlsx", "xls"], help="Archivo con costos logísticos de Anican.", key="anican_logistics_uploader")
-
-    with col2:
-        st.subheader("Archivos Auxiliares")
-        cxp_file = st.file_uploader("🇨🇱 Chile Express (CXP)", type=["csv", "xlsx", "xls"], help="Archivo de Chile Express con costos logísticos y de aduana.", key="cxp_uploader")
-        aditionals_file = st.file_uploader("➕ Anican Aditionals", type=["csv", "xlsx", "xls"], help="Archivo con costos adicionales de Anican.", key="aditionals_uploader")
-
-    st.markdown("---")
-    if st.button("🚀 Procesar y Guardar en Supabase", type="primary"):
-        if drapify_file: # Drapify es el mínimo requerido para que el proceso base inicie
-            with st.spinner("Procesando y uniendo archivos... Esto puede tomar unos segundos."):
-                df_processed_global = process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file)
-                
-                if not df_processed_global.empty:
-                    st.session_state['df_processed'] = df_processed_global # Guarda en session_state por si se necesita después
-                    
-                    st.subheader("Vista Previa de Datos Unidos (Primeras 10 filas)")
-                    st.dataframe(df_processed_global.head(10), use_container_width=True)
-                    st.write(f"Total de registros unidos: {len(df_processed_global)}")
-
-                    # Guarda en Supabase
-                    save_processed_data_to_supabase(df_processed_global)
-                else:
-                    st.error("⚠️ No se pudo procesar los archivos. Revisa los mensajes de error/advertencia anteriores.")
-        else:
-            st.warning("Por favor, carga al menos el archivo DRAPIFY para iniciar el procesamiento.")
-
-def page_view_data():
-    st.markdown("<h1>📊 Ver Datos Consolidados en Supabase</h1>", unsafe_allow_html=True)
-    st.info("Aquí puedes revisar los datos que han sido cargados y consolidados en tu base de datos Supabase.")
-
-    if st.button("🔄 Cargar Datos Recientes de Supabase"):
-        st.cache_data.clear() # Limpia la caché para obtener los datos más recientes
-        st.rerun() # Recarga la página para mostrar los datos actualizados
-
-    try:
-        # Asegúrate de que esta sea el nombre correcto de tu tabla en Supabase
-        # 'orders_data_raw' es la tabla donde se guardan los datos consolidados.
-        response = supabase.table('orders_data_raw').select('*').limit(500).order('order_id_drapify', desc=True).execute() 
-        
-        if response.data:
-            df_db = pd.DataFrame(response.data)
-            st.success(f"✅ Se cargaron {len(df_db)} registros de Supabase.")
-            st.dataframe(df_db, use_container_width=True)
-        else:
-            st.info("ℹ️ No hay datos disponibles en la tabla 'orders_data_raw' de Supabase aún. ¡Carga algunos archivos primero!")
-    except Exception as e:
-        st.error(f"❌ Error al cargar datos de Supabase: {e}")
-        st.warning("Asegúrate de que la tabla 'orders_data_raw' exista en tu base de datos Supabase y que las claves de acceso sean correctas.")
-
-
-# --- Lógica principal de la aplicación ---
-st.sidebar.title("Navegación del Sistema")
-page_selection = st.sidebar.radio("Elige una opción:", ["📂 Cargar y Unir Archivos", "📊 Ver Datos Consolidados"])
-
-if page_selection == "📂 Cargar y Unir Archivos":
-    page_process_files()
-elif page_selection == "📊 Ver Datos Consolidados":
-    page_view_data()
+        st.error("Error crítico: 'order_id_drapify' no se encuentra en el DataFrame
