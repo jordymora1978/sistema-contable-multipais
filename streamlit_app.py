@@ -42,7 +42,7 @@ supabase: Client = init_supabase_client()
 # se mapearán a los nombres de las columnas en tu tabla de Supabase (valor).
 # ES CRUCIAL QUE LOS VALORES (nombres de la DB) COINCIDAN EXACTAMENTE CON TU ESQUEMA EN SUPABASE.
 supabase_db_schema_mapping = {
-    # Columnas de DRAPIFY
+    # Columnas de DRAPIFY (nombres ya limpiados/renombrados)
     'system_hash': 'system_hash',
     'serial_hash': 'serial_hash',
     'order_id_drapify': 'order_id_drapify', # Usado como PK/Unique para upsert
@@ -57,9 +57,9 @@ supabase_db_schema_mapping = {
     'logistic_weight_lbs': 'logistic_weight_lbs',
     'refunded_date': 'refunded_date',
 
-    # Columnas de ANICAN LOGISTICS
+    # Columnas de ANICAN LOGISTICS (nombres ya limpiados/renombrados)
     'order_number_anican': 'order_number_anican',
-    'reference_anican': 'reference_anican',
+    'reference_anican': 'reference_anican', # Clave de unión con Drapify
     'fob': 'fob',
     'insurance': 'insurance',
     'logistics_anican': 'logistics_anican',
@@ -70,9 +70,9 @@ supabase_db_schema_mapping = {
     'total_anican': 'total_anican',
     'external_id': 'external_id',
 
-    # Columnas de CXP
+    # Columnas de CXP (nombres ya limpiados/renombrados)
     'date_cxp': 'date_cxp',
-    'ref_hash_cxp': 'ref_hash_cxp',
+    'ref_hash_cxp': 'ref_hash_cxp', # Clave de unión con Asignacion
     'co_aereo': 'co_aereo',
     'arancel_cxp': 'arancel_cxp',
     'iva_cxp': 'iva_cxp',
@@ -81,23 +81,26 @@ supabase_db_schema_mapping = {
     'amt_due_cxp': 'amt_due_cxp',
     'goods_value': 'goods_value',
 
-    # Columnas de ADITIONALS
-    'order_id_aditionals': 'order_id_aditionals',
+    # Columnas de ADITIONALS (nombres ya limpiados/renombrados)
+    'order_id_aditionals': 'order_id_aditionals', # Clave de unión con Anican Logistics
     'quantity_aditionals': 'quantity_aditionals',
     'unit_price_aditionals': 'unit_price_aditionals',
 
     # Columna calculada para unión
     'asignacion': 'asignacion',
     
-    # Columnas adicionales que pueden ser útiles para el futuro o para depuración
-    'created_at': 'created_at_app' # Un timestamp de cuándo se subió/procesó el registro en la app
+    # Columna para registrar cuándo se cargó/procesó el registro en la app
+    'processed_at_app': 'processed_at_app' 
 }
 
 # --- Funciones de Utilidad ---
 def leer_excel_o_csv(uploaded_file):
-    """Lee un archivo Excel o CSV y lo devuelve como DataFrame."""
+    """
+    Lee un archivo Excel o CSV y lo devuelve como DataFrame,
+    cargando todas las columnas como string inicialmente para robustez.
+    """
     try:
-        # Vuelve al inicio del archivo para asegurar una lectura completa
+        # Vuelve al inicio del archivo para asegurar una lectura completa cada vez
         uploaded_file.seek(0)
         if uploaded_file.name.endswith('.csv'):
             # Intenta detectar el delimitador automáticamente o usa la coma por defecto
@@ -118,11 +121,11 @@ def leer_excel_o_csv(uploaded_file):
             return None
     except Exception as e:
         st.error(f"Error al leer el archivo {uploaded_file.name}: {e}")
-        st.exception(e)
+        st.exception(e) # Muestra el traceback completo
         return None
 
 def limpiar_nombres_columnas(df):
-    """Limpia los nombres de las columnas de un DataFrame para hacerlos más consistentes."""
+    """Limpia los nombres de las columnas de un DataFrame para hacerlos más consistentes (snake_case)."""
     if df is None:
         return None
     new_columns = []
@@ -173,7 +176,7 @@ def try_read_cxp(uploaded_file):
 def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file):
     """
     Procesa y une todos los DataFrames de los archivos cargados,
-    sin realizar cálculos, solo preparación para la carga en Supabase.
+    sin realizar cálculos complejos, solo preparación para la carga en Supabase.
     """
     df_drapify = None
     df_anican = None
@@ -187,7 +190,7 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
         df_drapify = leer_excel_o_csv(drapify_file)
         if df_drapify is not None:
             df_drapify = limpiar_nombres_columnas(df_drapify)
-            # Renombrar columnas de Drapify para evitar conflictos y claridad en la unión
+            # Renombrar columnas de Drapify a los nombres estandarizados/mapeados
             df_drapify = df_drapify.rename(columns={
                 'order_id': 'order_id_drapify',
                 'quantity': 'quantity_drapify',
@@ -204,15 +207,14 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
                 'order_status_meli': 'order_status_meli',
             })
             # Asegurar que las columnas clave para uniones sean de tipo string y limpiar espacios
-            # Es importante convertir a string ANTES de limpiar espacios, para evitar errores en tipos no-string
             for col in ['order_id_drapify', 'serial_hash', 'account_name', 'date_created',
                         'logistic_type', 'order_status_meli', 'etiqueta_envio', 'refunded_date']:
                 if col in df_drapify.columns:
                     df_drapify[col] = df_drapify[col].astype(str).str.strip()
-            # Convertir columnas numéricas que ya sabes que necesitarás como numéricas
+            # Convertir columnas numéricas que se usarán como tal (solo las de Drapify aquí)
             for col in ['quantity_drapify', 'declare_value', 'net_real_amount', 'logistic_weight_lbs']:
                 if col in df_drapify.columns:
-                    df_drapify[col] = pd.to_numeric(df_drapify[col], errors='coerce').fillna(0) # Convertir y rellenar NaN con 0
+                    df_drapify[col] = pd.to_numeric(df_drapify[col], errors='coerce').fillna(0)
 
             st.info("✅ Archivo DRAPIFY cargado y columnas limpias.")
         else:
@@ -229,15 +231,21 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
         df_anican = leer_excel_o_csv(anican_logistics_file)
         if df_anican is not None:
             df_anican = limpiar_nombres_columnas(df_anican)
+            # Renombrar columnas de Anican Logistics
             df_anican = df_anican.rename(columns={
                 'order_number': 'order_number_anican',
                 'reference': 'reference_anican',
                 'logistics': 'logistics_anican',
                 'total': 'total_anican',
+                # Asegura que el resto de columnas estén en el mapeo si no se renombran
+                'fob': 'fob', 'insurance': 'insurance', 'duties_prealert': 'duties_prealert',
+                'duties_pay': 'duties_pay', 'duty_fee': 'duty_fee', 'saving': 'saving', 'external_id': 'external_id',
             })
+            # Convertir a string y limpiar espacios para las columnas de texto/ID
             for col in ['order_number_anican', 'reference_anican', 'external_id']:
                 if col in df_anican.columns:
                     df_anican[col] = df_anican[col].astype(str).str.strip()
+            # Convertir columnas numéricas
             for col in ['fob', 'insurance', 'logistics_anican', 'duties_prealert', 'duties_pay', 'duty_fee', 'saving', 'total_anican']:
                 if col in df_anican.columns:
                     df_anican[col] = pd.to_numeric(df_anican[col], errors='coerce').fillna(0)
@@ -249,13 +257,16 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
         df_aditionals = leer_excel_o_csv(aditionals_file)
         if df_aditionals is not None:
             df_aditionals = limpiar_nombres_columnas(df_aditionals)
+            # Renombrar columnas de Aditionals
             df_aditionals = df_aditionals.rename(columns={
                 'order_id': 'order_id_aditionals',
                 'quantity': 'quantity_aditionals',
                 'unit_price': 'unit_price_aditionals',
             })
+            # Convertir a string y limpiar espacios para la columna de ID
             if 'order_id_aditionals' in df_aditionals.columns:
                 df_aditionals['order_id_aditionals'] = df_aditionals['order_id_aditionals'].astype(str).str.strip()
+            # Convertir columnas numéricas
             for col in ['quantity_aditionals', 'unit_price_aditionals']:
                 if col in df_aditionals.columns:
                     df_aditionals[col] = pd.to_numeric(df_aditionals[col], errors='coerce').fillna(0)
@@ -265,6 +276,7 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
     if cxp_file:
         df_cxp = try_read_cxp(cxp_file) # Usa la función robusta
         if df_cxp is not None:
+            # Renombrar columnas de CXP
             df_cxp = df_cxp.rename(columns={
                 'ref_hash': 'ref_hash_cxp', # Ref # -> ref_hash_cxp (nombre limpio)
                 'date': 'date_cxp',
@@ -276,8 +288,10 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
                 'amt_due': 'amt_due_cxp',
                 'goods_value': 'goods_value',
             })
+            # Convertir a string y limpiar espacios para la columna de ID
             if 'ref_hash_cxp' in df_cxp.columns:
                 df_cxp['ref_hash_cxp'] = df_cxp['ref_hash_cxp'].astype(str).str.strip()
+            # Convertir columnas numéricas
             for col in ['co_aereo', 'arancel_cxp', 'iva_cxp', 'handling', 'dest_delivery', 'amt_due_cxp', 'goods_value']:
                 if col in df_cxp.columns:
                     df_cxp[col] = pd.to_numeric(df_cxp[col], errors='coerce').fillna(0)
@@ -290,7 +304,7 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
     if df_anican is not None and 'reference_anican' in df_anican.columns and 'order_id_drapify' in df_processed.columns:
         df_processed = pd.merge(df_processed, df_anican,
                                 left_on='order_id_drapify', right_on='reference_anican',
-                                how='left', suffixes=('', '_anican_logistics'))
+                                how='left', suffixes=('', '_anican_logistics_suffix')) # Sufijo para evitar conflictos
         st.success("✅ Drapify unido con Anican Logistics.")
     else:
         st.warning("⚠️ No se pudo unir Drapify con Anican Logistics. Se omitirá esta unión.")
@@ -302,16 +316,20 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
         if 'order_number_anican' in df_processed.columns:
             df_processed = pd.merge(df_processed, df_aditionals,
                                     left_on='order_number_anican', right_on='order_id_aditionals',
-                                    how='left', suffixes=('', '_aditionals_merged'))
+                                    how='left', suffixes=('', '_aditionals_merged_suffix')) # Sufijo para evitar conflictos
             st.success("✅ Datos unidos con Aditionals.")
         else:
-            st.warning("⚠️ 'order_number_anican' no encontrada en el DF principal. No se puede unir con Aditionals. Asegúrate de cargar Anican Logistics.")
+            st.warning("⚠️ La columna 'order_number_anican' no se encontró en el DataFrame principal (puede que Anican Logistics no se haya cargado o unido correctamente). No se puede unir con Aditionals. Asegúrate de cargar Anican Logistics.")
     else:
         st.warning("⚠️ No se pudo unir con Aditionals. Se omitirá esta unión.")
 
     # 3. Calcular columna 'Asignacion' (necesaria para la unión con CXP)
     df_processed['asignacion'] = None # Inicializar
     if 'account_name' in df_processed.columns and 'serial_hash' in df_processed.columns:
+        # Asegurar que serial_hash sea string y limpiar espacios para la concatenación
+        df_processed['serial_hash'] = df_processed['serial_hash'].astype(str).str.strip()
+        df_processed['account_name'] = df_processed['account_name'].astype(str).str.strip()
+
         # Aplicar la lógica de asignación
         df_processed.loc[df_processed['account_name'] == "1-TODOENCARGO-CO", 'asignacion'] = "TDC" + df_processed['serial_hash']
         df_processed.loc[df_processed['account_name'] == "2-MEGATIENDA SPA", 'asignacion'] = "MEGA" + df_processed['serial_hash']
@@ -324,20 +342,23 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
         df_processed['asignacion'] = df_processed['asignacion'].astype(str).str.strip()
         st.success("✅ Columna 'Asignacion' calculada.")
     else:
-        st.warning("⚠️ No se pudo calcular 'Asignacion'. Faltan columnas clave ('account_name' o 'serial_hash') en DRAPIFY.")
+        st.warning("⚠️ No se pudo calcular 'Asignacion'. Faltan columnas clave ('account_name' o 'serial_hash') en DRAPIFY después de la limpieza. Revisa tu archivo DRAPIFY.")
 
 
     # 4. Unir con CXP (usando asignacion y ref_hash_cxp)
     if df_cxp is not None and 'ref_hash_cxp' in df_cxp.columns and 'asignacion' in df_processed.columns:
+        # Asegurar que la columna 'asignacion' sea de tipo string y sin espacios, ya que se usa como clave de unión
+        df_processed['asignacion'] = df_processed['asignacion'].astype(str).str.strip()
         df_processed = pd.merge(df_processed, df_cxp,
                                 left_on='asignacion', right_on='ref_hash_cxp',
-                                how='left', suffixes=('', '_cxp_merged'))
+                                how='left', suffixes=('', '_cxp_merged_suffix')) # Sufijo para evitar conflictos
         st.success("✅ Datos unidos con CXP.")
     else:
-        st.warning("⚠️ No se pudo unir con CXP. Se omitirá esta unión.")
+        st.warning("⚠️ No se pudo unir con CXP. Se omitirá esta unión (asegúrate de que CXP tenga 'Ref #' y que 'Asignacion' se haya calculado correctamente).")
 
     st.success("🎉 ¡Todos los archivos han sido procesados y unidos en un solo DataFrame!")
-    return df_processed.replace({np.nan: None, pd.NaT: None}) # Reemplaza NaN y NaT por None para Supabase
+    # Reemplaza todos los NaN y NaT con None para una mejor inserción en Supabase
+    return df_processed.replace({np.nan: None, pd.NaT: None}) 
 
 def save_processed_data_to_supabase(df_to_save):
     """Guarda el DataFrame procesado en la tabla 'orders_data_raw' de Supabase."""
@@ -354,16 +375,17 @@ def save_processed_data_to_supabase(df_to_save):
         st.error("Error crítico: 'order_id_drapify' no se encuentra en el DataFrame final. No se puede guardar en Supabase sin una clave única.")
         return
 
-    # Añadir un timestamp de la aplicación para cada registro si aún no existe
-    if 'created_at' not in df_to_save.columns:
-        df_to_save['created_at'] = datetime.now()
+    # Añadir un timestamp de la aplicación para cada registro si aún no existe en el DF final
+    df_to_save['processed_at_app'] = datetime.now()
+
 
     for _, row in df_to_save.iterrows():
         record = {}
         for df_col_name, db_col_name in supabase_db_schema_mapping.items():
-            value = row.get(df_col_name) # Usa .get para columnas que puedan no existir después de uniones condicionales
+            # Obtiene el valor de la fila. Si la columna no existe en el DF, .get() devuelve None por defecto.
+            value = row.get(df_col_name) 
             
-            # Reemplazar NaN/NaT con None y convertir tipos básicos
+            # Reemplazar NaN/NaT con None y convertir tipos básicos para Supabase
             if pd.isna(value) or pd.isnull(value): # Verifica tanto para np.nan como pd.NaT
                 record[db_col_name] = None
             elif isinstance(value, datetime):
@@ -413,7 +435,7 @@ def page_process_files():
 
     st.markdown("---")
     if st.button("🚀 Procesar y Guardar en Supabase", type="primary"):
-        if drapify_file: # Drapify es el mínimo requerido
+        if drapify_file: # Drapify es el mínimo requerido para que el proceso base inicie
             with st.spinner("Procesando y uniendo archivos... Esto puede tomar unos segundos."):
                 df_processed_global = process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, aditionals_file)
                 
