@@ -520,8 +520,6 @@ def save_processed_data_to_supabase(df_to_save):
         st.error(f"❌ **Error al guardar en Supabase**: {e}")
         st.exception(e) # Muestra el stack trace completo para depuración
 
----
-
 # --- Páginas de la Aplicación ---
 def page_process_files():
     st.markdown("<h1>📂 Cargar y Unir Archivos de Órdenes</h1>", unsafe_allow_html=True)
@@ -539,7 +537,8 @@ def page_process_files():
         cxp_file = st.file_uploader("🇨🇱 **Chile Express (CXP)**", type=["csv", "xlsx", "xls"], key="cxp_uploader")
         aditionals_file = st.file_uploader("➕ **Anican Aditionals**", type=["csv", "xlsx", "xls"], key="aditionals_uploader")
 
-    ---
+    # Separador visual
+    st.markdown("---")
     
     # Botón para verificar columnas de Supabase
     if st.button("🔍 Verificar Columnas de Supabase"):
@@ -569,7 +568,8 @@ def page_process_files():
         else:
             st.warning("Por favor, **carga al menos el archivo DRAPIFY** para iniciar el procesamiento.")
 
----
+# Separador visual
+st.markdown("---")
 
 def page_view_data():
     st.markdown("<h1>📊 Ver Datos Consolidados</h1>", unsafe_allow_html=True)
@@ -593,7 +593,8 @@ def page_view_data():
         st.error(f"❌ Error al cargar datos desde Supabase: {e}")
         st.exception(e) # Mostrar detalles del error
 
----
+# Separador visual
+st.markdown("---")
 
 def page_debug_schema():
     st.markdown("<h1>🔧 Depuración de Schema y Sistema</h1>", unsafe_allow_html=True)
@@ -604,7 +605,8 @@ def page_debug_schema():
         valid_columns = get_valid_supabase_columns()
         if valid_columns:
             st.success(f"✅ La tabla **'orders'** existe en Supabase con **{len(valid_columns)}** columnas.")
-            ---
+            # Separador visual
+            st.markdown("---")
             st.subheader("Columnas encontradas en Supabase:")
             # Mostrar columnas en formato de lista para mejor lectura
             for i, col in enumerate(sorted(valid_columns), 1):
@@ -698,7 +700,8 @@ def page_debug_schema():
             if not missing_in_db: # Only if there are no missing columns, but also no present ones
                 st.info("Parece que no hay columnas mapeadas que coincidan con las de Supabase.")
 
-    ---
+    # Separador visual
+    st.markdown("---")
     st.subheader("🛠️ Información del Sistema")
     
     col1, col2 = st.columns(2)
@@ -737,7 +740,8 @@ def page_debug_schema():
             st.error(f"Error al obtener estadísticas de la base de datos: {e}")
             st.exception(e)
 
----
+# Separador visual
+st.markdown("---")
 
 # --- Lógica principal de la Aplicación Streamlit ---
 st.sidebar.title("🏢 Sistema Contable Multi-País")
@@ -757,7 +761,8 @@ st.sidebar.info("**FASE 1:** Consolidación de Datos")
 st.sidebar.markdown("""
 **Objetivo:** Unificar datos de múltiples fuentes:
 - 📄 **DRAPIFY** (base)
-- 🚚 **Anican Logistics** - 🇨🇱 **Chile Express (CXP)**
+- 🚚 **Anican Logistics** 
+- 🇨🇱 **Chile Express (CXP)**
 - ➕ **Aditionals**
 """)
 
