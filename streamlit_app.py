@@ -19,9 +19,6 @@ st.set_page_config(
 def init_supabase_client():
     """Inicializa la conexión con Supabase, usando st.secrets o valores de fallback."""
     try:
-        # Intenta cargar desde st.secrets.
-        # Si estas líneas causan un KeyError, significa que st.secrets no está configurado.
-        # En ese caso, se usarán las claves directamente codificadas (MENOS SEGURO PARA PRODUCCIÓN).
         url = st.secrets.get("supabase", {}).get("url", "https://qzexuqkedukcwcyhrpza.supabase.co")
         key = st.secrets.get("supabase", {}).get("key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0")
         
@@ -58,7 +55,7 @@ supabase_db_schema_mapping = {
     'refunded_date': 'refunded_date',
 
     # Columnas de ANICAN LOGISTICS (ya con nombres estandarizados)
-    'order_number_anican': 'order_number_anican',
+    'order_number_anican': 'order_number_anican', # <-- AQUI SE ASEGURA ESTE NOMBRE
     'reference_anican': 'reference_anican', # Clave de unión con Drapify
     'fob': 'fob',
     'insurance': 'insurance',
@@ -254,7 +251,7 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
         if df_anican_raw is not None:
             # --- RENOMBRADO EXPLÍCITO DE COLUMNAS CLAVE DE ANICAN LOGISTICS AQUÍ ---
             anican_renames = {
-                'Order number': 'Order_Number',
+                'Order number': 'Order_Number_Anican', # <--- ¡CAMBIO CLAVE AQUÍ!
                 'Reference': 'Reference_Anican', # Esta es la clave de unión con Drapify
                 'FOB': 'FOB', 'Insurance': 'Insurance',
                 'Logistics': 'Logistics_Anican_Value',
@@ -271,9 +268,11 @@ def process_files_for_upload(drapify_file, anican_logistics_file, cxp_file, adit
             # --- AHORA APLICA LA LIMPIEZA GENÉRICA A TODO EL DATAFRAME ---
             df_anican = limpiar_nombres_columnas_generico(df_anican)
 
-            for col in ['order_number', 'reference_anican', 'external_id_anican']:
+            # Asegurar que las claves de unión y otras cols importantes sean string y limpias
+            for col in ['order_number_anican', 'reference_anican', 'external_id_anican']: # <-- AQUI YA ES 'order_number_anican'
                 if col in df_anican.columns:
                     df_anican[col] = df_anican[col].astype(str).str.strip()
+            # Convertir a numérico las columnas que deben serlo
             for col in ['fob', 'insurance', 'logistics_anican_value', 'duties_prealert', 'duties_pay', 'duty_fee', 'saving', 'total_anican_value']:
                 if col in df_anican.columns:
                     df_anican[col] = pd.to_numeric(df_anican[col], errors='coerce').fillna(0)
