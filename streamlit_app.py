@@ -1206,3 +1206,223 @@ st.markdown("""
     <p>🌎 Gestión financiera unificada para Colombia, Perú y Chile</p>
 </div>
 """, unsafe_allow_html=True)
+
+def process_anican_logistics_complete(df_processed, anican_file):
+    try:
+        df_anican = pd.read_excel(anican_file)
+        
+        st.info(f"🔍 Columnas detectadas en Anican Logistics: {list(df_anican.columns)}")
+        
+        # Buscar columna Reference para el merge
+        reference_col = None
+        for col in df_anican.columns:
+            if str(col).strip() == 'Reference':
+                reference_col = col
+                break
+        
+        if reference_col:
+            st.success(f"✅ Columna Reference encontrada: '{reference_col}'")
+            
+            # Preparar TODAS las columnas para el merge
+            df_anican_clean = df_anican.copy()
+            df_anican_clean[reference_col] = df_anican_clean[reference_col].astype(str).str.strip()
+            
+            # Renombrar Reference a order_id para el merge, mantener todas las demás
+            df_anican_clean = df_anican_clean.rename(columns={reference_col: 'order_id'})
+            
+            # Agregar prefijo 'anican_' a todas las columnas excepto order_id
+            columns_to_rename = {}
+            for col in df_anican_clean.columns:
+                if col != 'order_id':
+                    columns_to_rename[col] = f'anican_{col}'
+            
+            df_anican_clean = df_anican_clean.rename(columns=columns_to_rename)
+            
+            # Hacer merge con TODAS las columnas
+            df_processed = df_processed.merge(
+                df_anican_clean,
+                on='order_id',
+                how='left'
+            )
+            
+            matches = df_processed[f'anican_{list(columns_to_rename.keys())[0]}'].notna().sum()
+            st.success(f"✅ Anican Logistics procesado: {matches} coincidencias, {len(df_anican_clean.columns)-1} columnas añadidas")
+            
+        else:
+            st.error(f"❌ No se encontró columna 'Reference' en Anican Logistics")
+            st.info("Columnas disponibles: " + ", ".join(df_anican.columns))
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando Anican Logistics: {str(e)}")
+    
+    return df_processed
+
+def process_anican_aditionals_complete(df_processed, aditionals_file):
+    try:
+        df_aditionals = pd.read_excel(aditionals_file)
+        
+        st.info(f"🔍 Columnas detectadas en Anican Aditionals: {list(df_aditionals.columns)}")
+        
+        # Buscar columna Order Id para el merge
+        order_id_col = None
+        for col in df_aditionals.columns:
+            if str(col).strip() == 'Order Id':
+                order_id_col = col
+                break
+        
+        if order_id_col:
+            st.success(f"✅ Columna Order Id encontrada: '{order_id_col}'")
+            
+            # Preparar TODAS las columnas
+            df_aditionals_clean = df_aditionals.copy()
+            df_aditionals_clean[order_id_col] = df_aditionals_clean[order_id_col].astype(str).str.strip()
+            
+            # Renombrar Order Id a order_id para el merge
+            df_aditionals_clean = df_aditionals_clean.rename(columns={order_id_col: 'order_id'})
+            
+            # Como puede haber múltiples líneas por order_id, agrupamos manteniendo la info
+            # Para campos de texto, tomamos el primero; para numéricos, sumamos
+            agg_dict = {}
+            for col in df_aditionals_clean.columns:
+                if col != 'order_id':
+                    if df_aditionals_clean[col].dtype in ['int64', 'float64']:
+                        agg_dict[col] = 'sum'
+                    else:
+                        agg_dict[col] = 'first'
+            
+            df_aditionals_grouped = df_aditionals_clean.groupby('order_id').agg(agg_dict).reset_index()
+            
+            # Agregar prefijo 'aditional_' a todas las columnas excepto order_id
+            columns_to_rename = {}
+            for col in df_aditionals_grouped.columns:
+                if col != 'order_id':
+                    columns_to_rename[col] = f'aditional_{col}'
+            
+            df_aditionals_grouped = df_aditionals_grouped.rename(columns=columns_to_rename)
+            
+            # Hacer merge
+            df_processed = df_processed.merge(
+                df_aditionals_grouped,
+                on='order_id',
+                how='left'
+            )
+            
+            matches = df_processed[f'aditional_{list(columns_to_rename.keys())[0]}'].notna().sum()
+            st.success(f"✅ Anican Aditionals procesado: {matches} coincidencias, {len(df_aditionals_grouped.columns)-1} columnas añadidas")
+            
+        else:
+            st.error(f"❌ No se encontró columna 'Order Id' en Anican Aditionals")
+            st.info("Columnas disponibles: " + ", ".join(df_aditionals.columns))
+            
+    except Exception as e:
+        st.error(f"❌ Error procesando Anican Aditionals: {str(e)}")
+    
+    return df_processed
+
+def process_cxp_complete(df_processed, cxp_file):
+    try:
+        excel_file_cxp = pd.ExcelFile(cxp_file)
+        df_cxp = None
+        
+        for sheet_name in excel_file_cxp.sheet_names:
+            for header_row in range(5):
+                try:
+                    df_test_cxp = pd.read_excel(cxp_file, sheet_name=sheet_name, header=header_row)
+                    
+                    st.info(f"🔍 Probando hoja '{sheet_name}', fila {header_row}")
+                    
+                    # Buscar columna Ref # para el merge
+                    ref_col = None
+                    for col in df_test_cxp.columns:
+                        if str(col).strip() == 'Ref #':
+                            ref_col = col
+                            break
+                    
+                    if ref_col:
+                        st.success(f"✅ CXP: Columna Ref # encontrada en '{sheet_name}', fila {header_row}")
+                        
+                        # Tomar TODAS las columnas
+                        df_cxp = df_test_cxp.copy()
+                        df_cxp[ref_col] = df_cxp[ref_col].astype(str).str.strip()
+                        
+                        # Renombrar Ref # a asignacion_cxp para el merge
+                        df_cxp = df_cxp.rename(columns={ref_col: 'asignacion_cxp'})
+                        
+                        # Agregar prefijo 'cxp_' a todas las columnas excepto asignacion_cxp
+                        columns_to_rename = {}
+                        for col in df_cxp.columns:
+                            if col != 'asignacion_cxp':
+                                columns_to_rename[col] = f'cxp_{col}'
+                        
+                        df_cxp = df_cxp.rename(columns=columns_to_rename)
+                        
+                        break
+                        
+                except Exception:
+                    continue
+                    
+            if df_cxp is not None:
+                break
+        
+        if df_cxp is not None:
+            # Hacer merge usando asignacion
+            df_processed = df_processed.merge(
+                df_cxp,
+                left_on='Asignacion',  # Asumiendo que ya existe en df_processed
+                right_on='asignacion_cxp',
+                how='left'
+            )
+            
+            # Limpiar columna temporal
+            df_processed = df_processed.drop(columns=['asignacion_cxp'])
+            
+            matches = df_processed[f'cxp_{list(columns_to_rename.keys())[0]}'].notna().sum()
+            st.success(f"✅ Chile Express procesado: {matches} coincidencias, {len(df_cxp.columns)-1} columnas añadidas")
+            
+        else:
+            st.warning("⚠️ No se pudo encontrar columna 'Ref #' en el archivo CXP")
+                
+    except Exception as e:
+        st.error(f"❌ Error procesando Chile Express: {str(e)}")
+    
+    return df_processed
+
+def save_orders_complete_to_supabase(df_processed_for_save):
+    """Guarda órdenes con TODAS las columnas en Supabase"""
+    try:
+        supabase = init_supabase()
+        if not supabase:
+            return False, "No hay conexión a Supabase"
+        
+        orders_data = []
+        for _, row in df_processed_for_save.iterrows():
+            # Crear diccionario con TODAS las columnas
+            order_dict = {}
+            for col in df_processed_for_save.columns:
+                value = row.get(col)
+                
+                # Convertir según tipo de dato
+                if pd.isna(value):
+                    order_dict[col] = None
+                elif isinstance(value, (int, float)):
+                    order_dict[col] = float(value) if not pd.isna(value) else 0.0
+                elif isinstance(value, datetime):
+                    order_dict[col] = value.isoformat()
+                else:
+                    order_dict[col] = str(value)
+            
+            orders_data.append(order_dict)
+            
+        # Insertar en lotes
+        batch_size = 50  # Reducido porque hay más columnas
+        total_inserted = 0
+        
+        for i in range(0, len(orders_data), batch_size):
+            batch = orders_data[i:i+batch_size]
+            result = supabase.table('orders_complete').upsert(batch, on_conflict='order_id').execute()
+            total_inserted += len(batch)
+            
+        return True, f"{total_inserted} órdenes completas guardadas/actualizadas"
+        
+    except Exception as e:
+        return False, f"Error al guardar órdenes completas: {str(e)}"
