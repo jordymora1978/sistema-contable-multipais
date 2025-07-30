@@ -24,10 +24,29 @@ def init_supabase():
 
 supabase = init_supabase()
 
+# Función para limpiar y normalizar IDs
+def clean_id(value):
+    """Limpia y normaliza IDs removiendo comillas y espacios"""
+    if pd.isna(value):
+        return None
+    str_value = str(value).strip()
+    # Remover comilla simple al inicio si existe
+    if str_value.startswith("'"):
+        str_value = str_value[1:]
+    # Remover .0 al final si es un número entero
+    if str_value.endswith('.0'):
+        str_value = str_value[:-2]
+    return str_value if str_value and str_value != 'nan' else None
+
 # Función para calcular asignación según las reglas especificadas
 def calculate_asignacion(account_name, serial_number):
     """Calcula la asignación basada en el account_name y serial_number"""
     if pd.isna(account_name) or pd.isna(serial_number):
+        return None
+    
+    # Limpiar serial_number para evitar decimales
+    clean_serial = clean_id(serial_number)
+    if not clean_serial:
         return None
     
     # Mapeo exacto según las especificaciones
@@ -43,7 +62,7 @@ def calculate_asignacion(account_name, serial_number):
     }
     
     prefix = account_mapping.get(account_name, '')
-    return f"{prefix}{serial_number}" if prefix else str(serial_number)
+    return f"{prefix}{clean_serial}" if prefix else clean_serial
 
 # Función principal para procesar archivos según las reglas especificadas
 def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_df=None, cxp_df=None):
@@ -71,13 +90,16 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         logistics_dict_by_order_number = {}
         
         for idx, row in logistics_df.iterrows():
-            reference = str(row.get('Reference', '')).strip()
-            order_number = str(row.get('Order number', '')).strip()
+            # Limpiar los IDs para mejor matching
+            reference = clean_id(row.get('Reference', ''))
+            order_number = clean_id(row.get('Order number', ''))
             
-            if reference and reference != 'nan':
+            if reference:
                 logistics_dict_by_reference[reference] = row
-            if order_number and order_number != 'nan':
+            if order_number:
                 logistics_dict_by_order_number[order_number] = row
+        
+        st.info(f"📋 Logistics indexado: {len(logistics_dict_by_reference)} por Reference, {len(logistics_dict_by_order_number)} por Order number")
         
         # Agregar columnas de Logistics al DataFrame consolidado
         logistics_columns = [
@@ -99,26 +121,34 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         
         # Hacer el matching según las reglas
         for idx, row in consolidated_df.iterrows():
-            order_id = str(row.get('order_id', '')).strip()
-            prealert_id = str(row.get('prealert_id', '')).strip()
+            # Limpiar los IDs para mejor matching
+            order_id = clean_id(row.get('order_id', ''))
+            prealert_id = clean_id(row.get('prealert_id', ''))
             
             logistics_row = None
+            match_type = None
             
             # Regla 1: Buscar order_id en Reference
-            if order_id and order_id != 'nan' and order_id in logistics_dict_by_reference:
+            if order_id and order_id in logistics_dict_by_reference:
                 logistics_row = logistics_dict_by_reference[order_id]
                 matched_by_order_id += 1
+                match_type = "order_id->Reference"
             
             # Regla 2: Si no encuentra, buscar prealert_id en Order number
-            elif prealert_id and prealert_id != 'nan' and prealert_id in logistics_dict_by_order_number:
+            elif prealert_id and prealert_id in logistics_dict_by_order_number:
                 logistics_row = logistics_dict_by_order_number[prealert_id]
                 matched_by_prealert_id += 1
+                match_type = "prealert_id->Order number"
             
             # Si encontró match, copiar los datos
             if logistics_row is not None:
                 for col in logistics_columns:
                     if col in logistics_df.columns:
                         consolidated_df.loc[idx, f'logistics_{col.lower().replace(" ", "_")}'] = logistics_row.get(col)
+                
+                # Debug: mostrar algunos matches
+                if (matched_by_order_id + matched_by_prealert_id) <= 5:
+                    st.write(f"✅ Match {matched_by_order_id + matched_by_prealert_id}: {match_type} - order_id: {order_id}, prealert_id: {prealert_id}")
         
         st.success(f"✅ Logistics procesado: {matched_by_order_id} matches por order_id, {matched_by_prealert_id} matches por prealert_id")
     
@@ -129,9 +159,11 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         # Crear diccionario para mapeo rápido de Aditionals
         aditionals_dict = {}
         for idx, row in aditionals_df.iterrows():
-            order_id = str(row.get('Order Id', '')).strip()
-            if order_id and order_id != 'nan':
+            order_id = clean_id(row.get('Order Id', ''))
+            if order_id:
                 aditionals_dict[order_id] = row
+        
+        st.info(f"📋 Aditionals indexado: {len(aditionals_dict)} registros")
         
         # Agregar columnas de Aditionals
         aditionals_columns = ['Order Id', 'Item', 'Reference', 'Description', 'Quantity', 'UnitPrice', 'Total']
@@ -144,15 +176,19 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         
         # Hacer matching por prealert_id -> Order Id
         for idx, row in consolidated_df.iterrows():
-            prealert_id = str(row.get('prealert_id', '')).strip()
+            prealert_id = clean_id(row.get('prealert_id', ''))
             
-            if prealert_id and prealert_id != 'nan' and prealert_id in aditionals_dict:
+            if prealert_id and prealert_id in aditionals_dict:
                 aditionals_row = aditionals_dict[prealert_id]
                 matched_aditionals += 1
                 
                 for col in aditionals_columns:
                     if col in aditionals_df.columns:
                         consolidated_df.loc[idx, f'aditionals_{col.lower().replace(" ", "_")}'] = aditionals_row.get(col)
+                
+                # Debug: mostrar algunos matches
+                if matched_aditionals <= 5:
+                    st.write(f"✅ Aditional Match {matched_aditionals}: prealert_id {prealert_id} encontrado")
         
         st.success(f"✅ Aditionals procesado: {matched_aditionals} matches por prealert_id")
     
@@ -176,9 +212,15 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         # Crear diccionario para mapeo rápido de CXP
         cxp_dict = {}
         for idx, row in cxp_df.iterrows():
-            ref_number = str(row.get('Ref #', '')).strip()
-            if ref_number and ref_number != 'nan':
+            ref_number = clean_id(row.get('Ref #', ''))
+            if ref_number:
                 cxp_dict[ref_number] = row
+        
+        st.info(f"📋 CXP indexado: {len(cxp_dict)} registros")
+        
+        # Mostrar algunos ejemplos de Ref # para debug
+        cxp_refs = list(cxp_dict.keys())[:5]
+        st.write(f"🔍 Ejemplos de Ref # en CXP: {cxp_refs}")
         
         # Agregar columnas de CXP
         cxp_columns = ['OT Number', 'Date', 'Ref #', 'Consignee', 'CO Aereo', 
@@ -192,16 +234,24 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         
         # Hacer matching por Asignacion -> Ref #
         if 'Asignacion' in consolidated_df.columns:
+            # Mostrar algunos ejemplos de Asignacion para debug
+            asignaciones = consolidated_df['Asignacion'].dropna().head(5).tolist()
+            st.write(f"🔍 Ejemplos de Asignacion calculadas: {asignaciones}")
+            
             for idx, row in consolidated_df.iterrows():
-                asignacion = str(row.get('Asignacion', '')).strip()
+                asignacion = clean_id(row.get('Asignacion', ''))
                 
-                if asignacion and asignacion != 'nan' and asignacion in cxp_dict:
+                if asignacion and asignacion in cxp_dict:
                     cxp_row = cxp_dict[asignacion]
                     matched_cxp += 1
                     
                     for col in cxp_columns:
                         if col in cxp_df.columns:
                             consolidated_df.loc[idx, f'cxp_{col.lower().replace(" ", "_").replace("#", "number")}'] = cxp_row.get(col)
+                    
+                    # Debug: mostrar algunos matches
+                    if matched_cxp <= 5:
+                        st.write(f"✅ CXP Match {matched_cxp}: Asignacion {asignacion} encontrada")
         
         st.success(f"✅ CXP procesado: {matched_cxp} matches por Asignacion")
     
