@@ -171,7 +171,10 @@ def apply_formatting(df):
         'logistics_fob', 'logistics_weight', 'logistics_length', 'logistics_width',
         'logistics_height', 'logistics_insurance', 'logistics_logistics',
         'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
-        'logistics_saving', 'logistics_total'
+        'logistics_saving', 'logistics_total',
+        # AGREGAR COLUMNAS DE CXP CON SUS NOMBRES REALES DESPUÉS DEL MAPEO
+        'cxp_co_aereo', 'cxp_arancel', 'cxp_iva', 'cxp_handling', 
+        'cxp_dest_delivery', 'cxp_amt_due', 'cxp_goods_value'
     ]
     
     for col in currency_with_decimals_columns:
@@ -181,8 +184,10 @@ def apply_formatting(df):
     
     # C) Corregir acentos en todas las columnas de texto
     text_columns = df.select_dtypes(include=['object']).columns
+    formatted_columns = currency_no_decimals_columns + currency_with_decimals_columns
+    
     for col in text_columns:
-        if col not in currency_no_decimals_columns + currency_with_decimals_columns:
+        if col not in formatted_columns:
             df[col] = df[col].apply(fix_accents)
     
     st.write(f"✅ Acentos corregidos en {len(text_columns)} columnas de texto")
