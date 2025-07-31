@@ -302,7 +302,10 @@ def apply_display_formatting(df):
         'logistics_fob', 'logistics_weight', 'logistics_length', 'logistics_width', 
         'logistics_height', 'logistics_insurance', 'logistics_logistics',
         'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
-        'logistics_saving', 'logistics_total'
+        'logistics_saving', 'logistics_total',
+        # Agregando columnas CXP con formato de decimales como logistics_total
+        'cxp_co_aereo', 'cxp_arancel', 'cxp_iva', 'cxp_handling', 
+        'cxp_dest_delivery', 'cxp_amt_due', 'cxp_goods_value'
     ]
     
     for col in currency_with_decimals_columns:
