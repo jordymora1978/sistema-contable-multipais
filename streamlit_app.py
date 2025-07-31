@@ -118,12 +118,20 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     st.success(f"✅ Drapify procesado: {len(consolidated_df)} registros")
     
     # PASO 2: Calcular Asignacion - CORREGIDO CON NOMBRES REALES
-    if 'account_name' in consolidated_df.columns and 'serial_number' in consolidated_df.columns:
-        consolidated_df['asignacion'] = consolidated_df.apply(
-            lambda row: calculate_asignacion(row['account_name'], row['serial_number']), 
-            axis=1
-        )
-        st.success(f"✅ Asignaciones calculadas")
+    if 'account_name' in consolidated_df.columns:
+        # Buscar columna serial (puede tener diferentes nombres)
+        serial_col = None
+        for col in ['Serial#', 'serial_number', 'serial#']:
+            if col in consolidated_df.columns:
+                serial_col = col
+                break
+        
+        if serial_col:
+            consolidated_df['asignacion'] = consolidated_df.apply(
+                lambda row: calculate_asignacion(row['account_name'], row[serial_col]), 
+                axis=1
+            )
+            st.success(f"✅ Asignaciones calculadas usando columna: {serial_col}")
     
     # PASO 3: Agregar fecha logistics si hay archivo
     if logistics_df is not None and logistics_date:
@@ -134,7 +142,7 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     return consolidated_df
 
 def insert_to_supabase_with_validation(df):
-    """Inserta datos en Supabase con validación de duplicados"""
+    """Inserta datos en Supabase con validación de duplicados Y MAPEO DE COLUMNAS"""
     if not supabase:
         st.error("❌ No hay conexión a Supabase")
         return {'inserted': 0, 'duplicates': 0, 'errors': 0}
@@ -171,60 +179,80 @@ def insert_to_supabase_with_validation(df):
         # Preparar registros para inserción
         records = df_to_insert.to_dict('records')
         
-        # Limpiar y preparar registros
-        cleaned_records = []
-        
-        # MAPEO DE NOMBRES DE COLUMNAS: DataFrame → Supabase
+        # MAPEO COMPLETO DE NOMBRES DE COLUMNAS: DataFrame → Supabase
         column_mapping = {
+            # Columnas principales
             'ASIN': 'asin',
             'Serial#': 'serial_number',
             'System#': 'system_number',
             'Asignacion': 'asignacion',
+            
+            # Columnas financieras
             'Declare Value': 'declare_value',
             'Meli Fee': 'meli_fee',
             'IVA': 'iva',
             'ICA': 'ica',
             'FUENTE': 'fuente',
+            
+            # Información personal
             'Estado': 'estado',
             'Ciudad': 'ciudad',
             'Numero de documento': 'numero_de_documento',
+            
+            # Pesos y medidas
             'Fixed Weight': 'fixed_weight',
             'Amazon Weight': 'amazon_weight',
+            'Cargo Weight': 'cargo_weight',
+            
+            # Etiquetas y fechas
             'ETIQUETA_ENVIO': 'etiqueta_envio',
             'LIBERATION DATE': 'liberation_date',
             'MWB': 'mwb',
             'Flight Date': 'flight_date',
             'PA Declare Value': 'pa_declare_value',
-            'Cargo Weight': 'cargo_weight',
+            
+            # Costos de courier
             'Freight Currier': 'freight_currier',
             'Freight Currier Users': 'freight_currier_users',
             'Freight Currier2': 'freight_currier2',
             'Freight Currier2 Users': 'freight_currier2_users',
+            
+            # Duties y fees
             'Duties Prealert': 'duties_prealert',
             'Custom Duty Fee': 'custom_duty_fee',
             'Saving': 'saving',
             'Local Delivery Corporativo': 'local_delivery_corporativo',
             'National Shipment From': 'national_shipment_from',
+            
+            # Packages
             'fullfilment package': 'fullfilment_package',
             'Package Consolidated': 'package_consolidated',
             'Buy Product Fee': 'buy_product_fee',
             'Total Master': 'total_master',
             'Total User': 'total_user',
+            
+            # Otros
             'COLOR': 'color',
             'TRM': 'trm'
         }
         
+        # Limpiar y preparar registros CON MAPEO
+        cleaned_records = []
         for record in records:
             cleaned_record = {}
             for key, value in record.items():
-                # Mapear nombre de columna si existe mapping
+                # PASO 1: Mapear nombre de columna si existe mapping
                 mapped_key = column_mapping.get(key, key)
                 
-                # Filtrar columnas que no existen en la tabla
+                # PASO 2: Convertir a minúsculas si no está en el mapping
+                if mapped_key == key:
+                    mapped_key = key.lower().replace(' ', '_').replace('#', '_number').replace('.', '_')
+                
+                # PASO 3: Filtrar columnas que no existen en la tabla
                 if available_columns and mapped_key not in available_columns:
                     continue
                 
-                # Limpiar valores
+                # PASO 4: Limpiar valores
                 if pd.isna(value):
                     cleaned_record[mapped_key] = None
                 elif isinstance(value, (pd.Timestamp, pd.DatetimeIndex)):
@@ -528,8 +556,6 @@ def mostrar_consolidador():
                 except Exception as e:
                     st.warning("No se pudo verificar el total en BD")
                 
-                # NO hacer st.rerun() aquí - mantener la información visible
-                
             except Exception as e:
                 st.error(f"❌ Error procesando archivos: {str(e)}")
                 st.exception(e)
@@ -806,12 +832,17 @@ def mostrar_dashboard_utilidades():
     
     with col1:
         st.markdown("**🔝 Top 10 Mejores Utilidades**")
-        top_utilidades = utilidades_df.nlargest(10, 'Utilidad Gss')[['serial_number', 'account_name', 'Utilidad Gss']]
+        # Buscar columna serial disponible
+        serial_col = 'serial_number'
+        if 'Serial#' in utilidades_df.columns:
+            serial_col = 'Serial#'
+        
+        top_utilidades = utilidades_df.nlargest(10, 'Utilidad Gss')[[serial_col, 'account_name', 'Utilidad Gss']]
         st.dataframe(top_utilidades, use_container_width=True)
     
     with col2:
         st.markdown("**🔻 Top 10 Peores Utilidades**")
-        bottom_utilidades = utilidades_df.nsmallest(10, 'Utilidad Gss')[['serial_number', 'account_name', 'Utilidad Gss']]
+        bottom_utilidades = utilidades_df.nsmallest(10, 'Utilidad Gss')[[serial_col, 'account_name', 'Utilidad Gss']]
         st.dataframe(bottom_utilidades, use_container_width=True)
 
 def mostrar_reportes():
