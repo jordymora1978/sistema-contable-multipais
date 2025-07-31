@@ -118,9 +118,9 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     st.success(f"✅ Drapify procesado: {len(consolidated_df)} registros")
     
     # PASO 2: Calcular Asignacion
-    if 'account_name' in consolidated_df.columns and 'Serial#' in consolidated_df.columns:
-        consolidated_df['Asignacion'] = consolidated_df.apply(
-            lambda row: calculate_asignacion(row['account_name'], row['Serial#']), 
+    if 'account_name' in consolidated_df.columns and 'serial_number' in consolidated_df.columns:
+        consolidated_df['asignacion'] = consolidated_df.apply(
+            lambda row: calculate_asignacion(row['account_name'], row['serial_number']), 
             axis=1
         )
         st.success(f"✅ Asignaciones calculadas")
@@ -153,14 +153,50 @@ def insert_to_supabase_with_validation(df):
             st.warning("⚠️ Todos los registros ya existen en la base de datos")
             return {'inserted': 0, 'duplicates': duplicates_count, 'errors': 0}
         
+        # Obtener columnas disponibles en la tabla orders
+        st.info("📋 Verificando estructura de la tabla...")
+        try:
+            # Hacer una consulta simple para obtener la estructura
+            test_result = supabase.table('orders').select('*').limit(1).execute()
+            available_columns = set()
+            if test_result.data:
+                available_columns = set(test_result.data[0].keys())
+            else:
+                # Si no hay datos, usar introspección básica
+                sample_insert = supabase.table('orders').select('*').limit(0).execute()
+        except Exception as e:
+            st.warning(f"No se pudo verificar estructura: {e}")
+            available_columns = set()
+        
         # Preparar registros para inserción
         records = df_to_insert.to_dict('records')
         
-        # Limpiar valores NaN
+        # Limpiar y preparar registros
+        cleaned_records = []
         for record in records:
+            cleaned_record = {}
             for key, value in record.items():
+                # Filtrar columnas que no existen en la tabla
+                if available_columns and key not in available_columns:
+                    continue
+                
+                # Limpiar valores
                 if pd.isna(value):
-                    record[key] = None
+                    cleaned_record[key] = None
+                elif isinstance(value, (pd.Timestamp, pd.DatetimeIndex)):
+                    # Convertir fechas pandas a string
+                    cleaned_record[key] = value.strftime('%Y-%m-%d %H:%M:%S') if pd.notna(value) else None
+                elif hasattr(value, 'isoformat'):
+                    # Fechas datetime normales
+                    cleaned_record[key] = value.isoformat()
+                else:
+                    cleaned_record[key] = value
+            
+            cleaned_records.append(cleaned_record)
+        
+        if not cleaned_records:
+            st.error("❌ No hay datos válidos para insertar después de la limpieza")
+            return {'inserted': 0, 'duplicates': duplicates_count, 'errors': len(df_to_insert)}
         
         # Insertar en lotes
         batch_size = 50
@@ -170,16 +206,16 @@ def insert_to_supabase_with_validation(df):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
+        for i in range(0, len(cleaned_records), batch_size):
+            batch = cleaned_records[i:i + batch_size]
             
             try:
                 result = supabase.table('orders').insert(batch).execute()
                 total_inserted += len(batch)
                 
-                progress = min(1.0, (i + batch_size) / len(records))
+                progress = min(1.0, (i + batch_size) / len(cleaned_records))
                 progress_bar.progress(progress)
-                status_text.text(f"Insertando lote {i//batch_size + 1}... ({total_inserted}/{len(records)})")
+                status_text.text(f"Insertando lote {i//batch_size + 1}... ({total_inserted}/{len(cleaned_records)})")
                 
             except Exception as batch_error:
                 st.error(f"Error en lote {i//batch_size + 1}: {str(batch_error)}")
@@ -389,7 +425,7 @@ def mostrar_consolidador():
                 st.session_state.last_processing_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 st.session_state.processing_stats = {
                     'total_registros': len(consolidated_df),
-                    'asignaciones': consolidated_df['Asignacion'].notna().sum() if 'Asignacion' in consolidated_df.columns else 0,
+                    'asignaciones': consolidated_df['asignacion'].notna().sum() if 'asignacion' in consolidated_df.columns else 0,
                     'con_fecha_logistics': consolidated_df['fecha_logistics'].notna().sum() if 'fecha_logistics' in consolidated_df.columns else 0,
                     'columnas': len(consolidated_df.columns)
                 }
@@ -726,12 +762,12 @@ def mostrar_dashboard_utilidades():
     
     with col1:
         st.markdown("**🔝 Top 10 Mejores Utilidades**")
-        top_utilidades = utilidades_df.nlargest(10, 'Utilidad Gss')[['Serial#', 'account_name', 'Utilidad Gss']]
+                    top_utilidades = utilidades_df.nlargest(10, 'Utilidad Gss')[['serial_number', 'account_name', 'Utilidad Gss']]
         st.dataframe(top_utilidades, use_container_width=True)
     
     with col2:
         st.markdown("**🔻 Top 10 Peores Utilidades**")
-        bottom_utilidades = utilidades_df.nsmallest(10, 'Utilidad Gss')[['Serial#', 'account_name', 'Utilidad Gss']]
+                    bottom_utilidades = utilidades_df.nsmallest(10, 'Utilidad Gss')[['serial_number', 'account_name', 'Utilidad Gss']]
         st.dataframe(bottom_utilidades, use_container_width=True)
 
 def mostrar_reportes():
