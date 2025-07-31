@@ -27,25 +27,10 @@ st.set_page_config(
 # Configuración de Supabase
 @st.cache_resource
 def init_supabase():
-    try:
-        # Intentar primero desde st.secrets
-        if hasattr(st, 'secrets') and "SUPABASE_URL" in st.secrets:
-            url = st.secrets["SUPABASE_URL"]
-            key = st.secrets["SUPABASE_ANON_KEY"]
-        else:
-            # Fallback a variables de entorno o valores por defecto
-            url = os.getenv("SUPABASE_URL", "https://pqlvmxnhztajoxkwyuoh.supabase.co")
-            key = os.getenv("SUPABASE_ANON_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxbHZteG5oenRham94a3d5dW9oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzUxNzI4OTQsImV4cCI6MjA1MDc0ODg5NH0.TiQoTR4_W9xF0tZWnfhY4qc5WkfMBNvMH-bAfJlW6XM")
-        
-        if url and key:
-            return create_client(url, key)
-        else:
-            st.error("❌ Configuración de Supabase incompleta")
-            return None
-            
-    except Exception as e:
-        st.error(f"❌ Error conectando a Supabase: {str(e)}")
-        return None
+    # Credenciales actualizadas correctas
+    url = "https://qzexuqkedukcwcyhrpza.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0"
+    return create_client(url, key)
 
 supabase = init_supabase()
 
@@ -775,4 +760,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
