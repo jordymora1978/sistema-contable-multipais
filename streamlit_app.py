@@ -221,6 +221,7 @@ def mostrar_consolidador(processing_mode):
                 type="primary"
             )
         
+        st.info("💡 Puedes cargar nuevos archivos abajo para reemplazar estos datos")
         st.markdown("---")
     
     col1, col2 = st.columns([2, 1])
@@ -312,8 +313,9 @@ def mostrar_consolidador(processing_mode):
         else:
             st.warning("⚠️ Archivo Drapify requerido")
     
-    # BOTÓN DE PROCESAMIENTO
-    if st.button("🚀 Procesar Archivos", disabled=not drapify_file, type="primary"):
+    # BOTÓN DE PROCESAMIENTO - Siempre habilitado si hay archivo Drapify
+    button_text = "🔄 Reprocesar Archivos" if st.session_state.processing_complete else "🚀 Procesar Archivos"
+    if st.button(button_text, disabled=not drapify_file, type="primary"):
         
         with st.spinner("Procesando archivos..."):
             try:
@@ -359,7 +361,7 @@ def mostrar_consolidador(processing_mode):
                 st.header("🎨 Aplicando Formateos")
                 consolidated_df = apply_formatting(consolidated_df)
                 
-                # GUARDAR EN SESSION STATE
+                # GUARDAR EN SESSION STATE (sobrescribir datos anteriores)
                 st.session_state.consolidated_data = consolidated_df
                 st.session_state.processing_complete = True
                 st.session_state.last_processing_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -370,7 +372,11 @@ def mostrar_consolidador(processing_mode):
                     'columnas': len(consolidated_df.columns)
                 }
                 
-                st.success("💾 Datos guardados en memoria para toda la sesión")
+                # Limpiar utilidades anteriores al reprocesar
+                st.session_state.utilidades_data = None
+                st.session_state.utilidades_calculated = False
+                
+                st.success("💾 Datos guardados en memoria (datos anteriores reemplazados)")
                 
                 # Insertar en BD si se seleccionó
                 if processing_mode == "Consolidar e insertar en DB":
