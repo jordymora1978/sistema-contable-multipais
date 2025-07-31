@@ -834,17 +834,14 @@ def main():
         
         st.markdown("---")
         
-        # Navegación
-        opciones_menu = ["🏠 Consolidador de Archivos"]
-        
-        if UTILIDADES_AVAILABLE:
-            opciones_menu.extend([
-                "💰 Cálculo de Utilidades",
-                "💱 Gestión TRM", 
-                "📊 Dashboard Utilidades"
-            ])
-        
-        opciones_menu.append("📋 Reportes")
+        # Navegación - SIEMPRE MOSTRAR TODAS LAS OPCIONES
+        opciones_menu = [
+            "🏠 Consolidador de Archivos",
+            "💰 Cálculo de Utilidades",
+            "💱 Gestión TRM", 
+            "📊 Dashboard Utilidades",
+            "📋 Reportes"
+        ]
         
         pagina = st.selectbox("📋 Navegación", opciones_menu)
         
