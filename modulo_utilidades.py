@@ -834,7 +834,7 @@ def main():
         
         st.markdown("---")
         
-        # Navegación - SIEMPRE MOSTRAR TODAS LAS OPCIONES
+        # NAVEGACIÓN - SIEMPRE MOSTRAR TODAS LAS OPCIONES
         opciones_menu = [
             "🏠 Consolidador de Archivos",
             "💰 Cálculo de Utilidades",
