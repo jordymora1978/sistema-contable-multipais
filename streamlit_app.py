@@ -109,15 +109,15 @@ def calculate_asignacion(account_name, serial_number):
     return f"{prefix}{clean_serial}" if prefix else clean_serial
 
 def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_df=None, cxp_df=None, logistics_date=None):
-    """Procesa y consolida archivos según las reglas especificadas"""
+    """Procesa y consolida archivos según las reglas especificadas CON MATCHING REAL"""
     
     st.info("🔄 Iniciando consolidación...")
     
-    # PASO 1: Usar Drapify como base
+    # PASO 1: USAR DRAPIFY COMO BASE
     consolidated_df = drapify_df.copy()
     st.success(f"✅ Drapify procesado: {len(consolidated_df)} registros")
     
-    # PASO 2: Calcular Asignacion - CORREGIDO CON NOMBRES REALES
+    # PASO 2: CALCULAR ASIGNACION
     if 'account_name' in consolidated_df.columns:
         # Buscar columna serial (puede tener diferentes nombres)
         serial_col = None
@@ -133,12 +133,189 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
             )
             st.success(f"✅ Asignaciones calculadas usando columna: {serial_col}")
     
-    # PASO 3: Agregar fecha logistics si hay archivo
-    if logistics_df is not None and logistics_date:
-        consolidated_df['fecha_logistics'] = logistics_date.strftime('%Y-%m-%d')
-        st.success(f"✅ Fecha logistics aplicada: {logistics_date}")
+    # PASO 3: MATCHING CON LOGISTICS (Anicam Internacional)
+    if logistics_df is not None:
+        st.info("🔗 Haciendo matching con Logistics...")
+        
+        # Limpiar order_id en ambos DataFrames para matching
+        consolidated_df['order_id_clean'] = consolidated_df['order_id'].astype(str).str.replace("'", "").str.strip()
+        logistics_df['reference_clean'] = logistics_df['Reference'].astype(str).str.replace("'", "").str.strip()
+        
+        # Hacer merge por order_id ↔ Reference
+        logistics_matched = logistics_df.merge(
+            consolidated_df[['order_id_clean']].reset_index().rename(columns={'index': 'drapify_index'}),
+            left_on='reference_clean',
+            right_on='order_id_clean',
+            how='inner'
+        )
+        
+        st.info(f"📊 Logistics matches encontrados: {len(logistics_matched)} de {len(logistics_df)}")
+        
+        # Agregar columnas de logistics al consolidated_df
+        logistics_columns = {
+            'Guide Number': 'logistics_guide_number',
+            'Order number': 'logistics_order_number', 
+            'Reference': 'logistics_reference',
+            'SAP Code': 'logistics_sap_code',
+            'Invoice': 'logistics_invoice',
+            'Status': 'logistics_status',
+            'FOB': 'logistics_fob',
+            'Unit': 'logistics_unit',
+            'Weight': 'logistics_weight',
+            'Length': 'logistics_length',
+            'Width': 'logistics_width', 
+            'Height': 'logistics_height',
+            'Insurance': 'logistics_insurance',
+            'Logistics': 'logistics_logistics',
+            'Duties Prealert': 'logistics_duties_prealert',
+            'Duties Pay': 'logistics_duties_pay',
+            'Duty Fee': 'logistics_duty_fee',
+            'Saving': 'logistics_saving',
+            'Total': 'logistics_total',
+            'Description': 'logistics_description',
+            'Shipper': 'logistics_shipper',
+            'Phone': 'logistics_phone',
+            'Consignee': 'logistics_consignee',
+            'Identification': 'logistics_identification',
+            'Country': 'logistics_country',
+            'State': 'logistics_state',
+            'City': 'logistics_city',
+            'Address': 'logistics_address',
+            'Master Guide': 'logistics_master_guide',
+            'Tariff Position': 'logistics_tariff_position',
+            'External Id': 'logistics_external_id'
+        }
+        
+        # Inicializar columnas de logistics en consolidated_df
+        for new_col in logistics_columns.values():
+            consolidated_df[new_col] = None
+        
+        # Llenar datos de logistics donde hay match
+        for _, match_row in logistics_matched.iterrows():
+            drapify_idx = match_row['drapify_index']
+            for orig_col, new_col in logistics_columns.items():
+                if orig_col in match_row:
+                    consolidated_df.loc[drapify_idx, new_col] = match_row[orig_col]
+        
+        # Agregar fecha logistics si hay archivo
+        if logistics_date:
+            consolidated_df['fecha_logistics'] = logistics_date.strftime('%Y-%m-%d')
+            st.success(f"✅ Fecha logistics aplicada: {logistics_date}")
+        
+        st.success(f"✅ Logistics consolidado: {len(logistics_matched)} matches aplicados")
     
-    st.success(f"🎉 Consolidación completada: {len(consolidated_df)} registros")
+    # PASO 4: MATCHING CON ADITIONALS (Costos Adicionales Anicam)
+    if aditionals_df is not None:
+        st.info("🔗 Haciendo matching con Aditionals...")
+        
+        # Intentar matching por prealert_id ↔ Order Id
+        if 'prealert_id' in consolidated_df.columns:
+            # Limpiar prealert_id para matching
+            consolidated_df['prealert_id_clean'] = consolidated_df['prealert_id'].astype(str).str.strip()
+            aditionals_df['order_id_clean_adit'] = aditionals_df['Order Id'].astype(str).str.strip()
+            
+            # Hacer merge
+            aditionals_matched = aditionals_df.merge(
+                consolidated_df[['prealert_id_clean']].reset_index().rename(columns={'index': 'drapify_index'}),
+                left_on='order_id_clean_adit',
+                right_on='prealert_id_clean',
+                how='inner'
+            )
+            
+            st.info(f"📊 Aditionals matches encontrados: {len(aditionals_matched)} de {len(aditionals_df)}")
+            
+            # Agregar columnas de aditionals
+            aditionals_columns = {
+                'Order Id': 'aditionals_order_id',
+                'Item': 'aditionals_item',
+                'Reference': 'aditionals_reference',
+                'Description': 'aditionals_description',
+                'Quantity': 'aditionals_quantity',
+                'UnitPrice': 'aditionals_unitprice',
+                'Total': 'aditionals_total'
+            }
+            
+            # Inicializar columnas
+            for new_col in aditionals_columns.values():
+                consolidated_df[new_col] = None
+            
+            # Llenar datos donde hay match
+            for _, match_row in aditionals_matched.iterrows():
+                drapify_idx = match_row['drapify_index']
+                for orig_col, new_col in aditionals_columns.items():
+                    if orig_col in match_row:
+                        consolidated_df.loc[drapify_idx, new_col] = match_row[orig_col]
+            
+            st.success(f"✅ Aditionals consolidado: {len(aditionals_matched)} matches aplicados")
+        else:
+            st.warning("⚠️ No se encontró columna prealert_id para matching con Aditionals")
+    
+    # PASO 5: MATCHING CON CXP (Chilexpress)
+    if cxp_df is not None:
+        st.info("🔗 Haciendo matching con CXP...")
+        
+        # Primero identificar la estructura correcta del archivo CXP
+        st.info(f"📋 CXP columnas disponibles: {list(cxp_df.columns)}")
+        
+        # Buscar la columna correcta de referencia en CXP
+        ref_column = None
+        for col in ['Ref #', 'Ref#', 'Reference', 'Ref_Number', 'ref_number']:
+            if col in cxp_df.columns:
+                ref_column = col
+                break
+        
+        if ref_column and 'asignacion' in consolidated_df.columns:
+            # Limpiar asignacion para matching
+            consolidated_df['asignacion_clean'] = consolidated_df['asignacion'].astype(str).str.strip()
+            cxp_df['ref_clean'] = cxp_df[ref_column].astype(str).str.strip()
+            
+            # Hacer merge por Asignacion ↔ Ref #
+            cxp_matched = cxp_df.merge(
+                consolidated_df[['asignacion_clean']].reset_index().rename(columns={'index': 'drapify_index'}),
+                left_on='ref_clean',
+                right_on='asignacion_clean',
+                how='inner'
+            )
+            
+            st.info(f"📊 CXP matches encontrados: {len(cxp_matched)} de {len(cxp_df)}")
+            
+            # Mapear columnas de CXP
+            cxp_columns = {
+                'OT Number': 'cxp_ot_number',
+                'Date': 'cxp_date',
+                'Ref #': 'cxp_ref_number',
+                'Consignee': 'cxp_consignee',
+                'CO Aereo': 'cxp_co_aereo',
+                'Arancel': 'cxp_arancel',
+                'IVA': 'cxp_iva',
+                'Handling': 'cxp_handling',
+                'Dest. Delivery': 'cxp_dest_delivery',
+                'Amt. Due': 'cxp_amt_due',
+                'Goods Value': 'cxp_goods_value'
+            }
+            
+            # Inicializar columnas de CXP
+            for new_col in cxp_columns.values():
+                consolidated_df[new_col] = None
+            
+            # Llenar datos donde hay match
+            for _, match_row in cxp_matched.iterrows():
+                drapify_idx = match_row['drapify_index']
+                for orig_col, new_col in cxp_columns.items():
+                    if orig_col in match_row:
+                        consolidated_df.loc[drapify_idx, new_col] = match_row[orig_col]
+            
+            st.success(f"✅ CXP consolidado: {len(cxp_matched)} matches aplicados")
+        else:
+            st.warning(f"⚠️ No se pudo hacer matching con CXP. Columna ref encontrada: {ref_column}")
+    
+    # PASO 6: LIMPIAR COLUMNAS TEMPORALES
+    columns_to_drop = ['order_id_clean', 'reference_clean', 'prealert_id_clean', 'order_id_clean_adit', 'asignacion_clean', 'ref_clean']
+    for col in columns_to_drop:
+        if col in consolidated_df.columns:
+            consolidated_df.drop(col, axis=1, inplace=True)
+    
+    st.success(f"🎉 Consolidación completada: {len(consolidated_df)} registros con matches aplicados")
     return consolidated_df
 
 def insert_to_supabase_with_validation(df):
