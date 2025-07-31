@@ -173,24 +173,68 @@ def insert_to_supabase_with_validation(df):
         
         # Limpiar y preparar registros
         cleaned_records = []
+        
+        # MAPEO DE NOMBRES DE COLUMNAS: DataFrame → Supabase
+        column_mapping = {
+            'ASIN': 'asin',
+            'Serial#': 'serial_number',
+            'System#': 'system_number',
+            'Asignacion': 'asignacion',
+            'Declare Value': 'declare_value',
+            'Meli Fee': 'meli_fee',
+            'IVA': 'iva',
+            'ICA': 'ica',
+            'FUENTE': 'fuente',
+            'Estado': 'estado',
+            'Ciudad': 'ciudad',
+            'Numero de documento': 'numero_de_documento',
+            'Fixed Weight': 'fixed_weight',
+            'Amazon Weight': 'amazon_weight',
+            'ETIQUETA_ENVIO': 'etiqueta_envio',
+            'LIBERATION DATE': 'liberation_date',
+            'MWB': 'mwb',
+            'Flight Date': 'flight_date',
+            'PA Declare Value': 'pa_declare_value',
+            'Cargo Weight': 'cargo_weight',
+            'Freight Currier': 'freight_currier',
+            'Freight Currier Users': 'freight_currier_users',
+            'Freight Currier2': 'freight_currier2',
+            'Freight Currier2 Users': 'freight_currier2_users',
+            'Duties Prealert': 'duties_prealert',
+            'Custom Duty Fee': 'custom_duty_fee',
+            'Saving': 'saving',
+            'Local Delivery Corporativo': 'local_delivery_corporativo',
+            'National Shipment From': 'national_shipment_from',
+            'fullfilment package': 'fullfilment_package',
+            'Package Consolidated': 'package_consolidated',
+            'Buy Product Fee': 'buy_product_fee',
+            'Total Master': 'total_master',
+            'Total User': 'total_user',
+            'COLOR': 'color',
+            'TRM': 'trm'
+        }
+        
         for record in records:
             cleaned_record = {}
             for key, value in record.items():
+                # Mapear nombre de columna si existe mapping
+                mapped_key = column_mapping.get(key, key)
+                
                 # Filtrar columnas que no existen en la tabla
-                if available_columns and key not in available_columns:
+                if available_columns and mapped_key not in available_columns:
                     continue
                 
                 # Limpiar valores
                 if pd.isna(value):
-                    cleaned_record[key] = None
+                    cleaned_record[mapped_key] = None
                 elif isinstance(value, (pd.Timestamp, pd.DatetimeIndex)):
                     # Convertir fechas pandas a string
-                    cleaned_record[key] = value.strftime('%Y-%m-%d %H:%M:%S') if pd.notna(value) else None
+                    cleaned_record[mapped_key] = value.strftime('%Y-%m-%d %H:%M:%S') if pd.notna(value) else None
                 elif hasattr(value, 'isoformat'):
                     # Fechas datetime normales
-                    cleaned_record[key] = value.isoformat()
+                    cleaned_record[mapped_key] = value.isoformat()
                 else:
-                    cleaned_record[key] = value
+                    cleaned_record[mapped_key] = value
             
             cleaned_records.append(cleaned_record)
         
