@@ -7,10 +7,15 @@ from datetime import datetime
 import io
 import time
 
+# NUEVOS IMPORTS PARA UTILIDADES
+from modulo_utilidades import get_calculador_utilidades
+import plotly.express as px
+import plotly.graph_objects as go
+
 # Configuración de la página
 st.set_page_config(
-    page_title="Consolidador de Órdenes",
-    page_icon="📦",
+    page_title="Sistema de Gestión Integral",
+    page_icon="💰",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -522,7 +527,7 @@ def insert_to_supabase(df):
             batch = records[i:i + batch_size]
             
             try:
-                result = supabase.table('consolidated_orders').insert(batch).execute()
+                result = supabase.table('orders').insert(batch).execute()
                 total_inserted += len(batch)
                 
                 progress = min(1.0, (i + batch_size) / len(records))
@@ -542,15 +547,34 @@ def insert_to_supabase(df):
         st.error(f"Error general: {str(e)}")
         return 0
 
-# Interfaz principal
+# ===============================================
+# FUNCIÓN PRINCIPAL CON ROUTING
+# ===============================================
+
 def main():
-    st.title("📦 Consolidador de Órdenes")
-    st.markdown("### Procesa y consolida archivos según reglas específicas de negocio")
+    st.title("💰 Sistema de Gestión Integral")
+    st.markdown("### Consolidación de archivos y cálculo de utilidades")
     
-    # Sidebar con información
+    # Sidebar con navegación expandida
     with st.sidebar:
-        st.header("⚙️ Configuración")
+        st.image("https://via.placeholder.com/150x50/4F46E5/white?text=LOGO", width=150)
+        st.markdown("---")
         
+        # NAVEGACIÓN EXPANDIDA
+        pagina = st.selectbox(
+            "📋 Navegación",
+            [
+                "🏠 Consolidador de Archivos",
+                "💰 Cálculo de Utilidades",
+                "💱 Gestión TRM",
+                "📊 Dashboard Utilidades",
+                "📋 Reportes"
+            ]
+        )
+        
+        st.markdown("---")
+        
+        # Configuración
         processing_mode = st.radio(
             "Modo de procesamiento:",
             ["Solo consolidar", "Consolidar e insertar en DB"]
@@ -560,13 +584,32 @@ def main():
         st.markdown("**📋 Orden de procesamiento:**")
         st.markdown("1. 📋 **Drapify** (base - obligatorio)")
         st.markdown("2. 🚚 **Logistics** (opcional)")
-        st.markdown("   - Match: order_id → Reference")
-        st.markdown("   - Fallback: prealert_id → Order number")
         st.markdown("3. ➕ **Aditionals** (opcional)")
-        st.markdown("   - Match: prealert_id → Order Id")
         st.markdown("4. 🏷️ **Calcular Asignacion**")
         st.markdown("5. 💰 **CXP** (opcional)")
-        st.markdown("   - Match: Asignacion → Ref #")
+    
+    # ROUTING DE PÁGINAS
+    if pagina == "🏠 Consolidador de Archivos":
+        mostrar_consolidador(processing_mode)
+        
+    elif pagina == "💰 Cálculo de Utilidades":
+        mostrar_calculo_utilidades()
+        
+    elif pagina == "💱 Gestión TRM":
+        mostrar_gestion_trm()
+        
+    elif pagina == "📊 Dashboard Utilidades":
+        mostrar_dashboard_utilidades()
+        
+    elif pagina == "📋 Reportes":
+        mostrar_reportes()
+
+# ===============================================
+# PÁGINA DEL CONSOLIDADOR (TU CÓDIGO ORIGINAL)
+# ===============================================
+
+def mostrar_consolidador(processing_mode):
+    """Página del consolidador de archivos"""
     
     # Área principal
     col1, col2 = st.columns([2, 1])
@@ -588,7 +631,7 @@ def main():
             help="Costos de Anicam para envíos internacionales"
         )
         
-        # NUEVA FUNCIONALIDAD: Fecha manual para Logistics
+        # Fecha manual para Logistics
         logistics_date = None
         if logistics_file:
             st.markdown("**📅 Fecha de Datos de Logistics:**")
@@ -824,7 +867,7 @@ def main():
     with query_col1:
         if st.button("📊 Ver Estadísticas Generales"):
             try:
-                result = supabase.table('consolidated_orders').select('account_name').execute()
+                result = supabase.table('orders').select('account_name').execute()
                 
                 if result.data:
                     df = pd.DataFrame(result.data)
@@ -844,7 +887,7 @@ def main():
     with query_col2:
         if st.button("📋 Ver Últimos Registros"):
             try:
-                result = supabase.table('consolidated_orders').select('*').order('created_at', desc=True).limit(10).execute()
+                result = supabase.table('orders').select('*').order('created_at', desc=True).limit(10).execute()
                 
                 if result.data:
                     recent_df = pd.DataFrame(result.data)
@@ -877,7 +920,7 @@ def main():
     
     if st.button("🔍 Buscar"):
         try:
-            query = supabase.table('consolidated_orders').select('*')
+            query = supabase.table('orders').select('*')
             
             if search_order_id:
                 query = query.eq('order_id', search_order_id)
@@ -900,11 +943,8 @@ def main():
         except Exception as e:
             st.error(f"Error en la búsqueda: {str(e)}")
 
-if __name__ == "__main__":
-    main()
 # ===============================================
-# FUNCIONES PARA LAS NUEVAS PÁGINAS DE UTILIDADES
-# Agregar al final de tu streamlit_app.py
+# PÁGINAS DE UTILIDADES
 # ===============================================
 
 def mostrar_calculo_utilidades():
@@ -1243,22 +1283,8 @@ def mostrar_reportes():
         st.write("• Dashboard Interactivo")
 
 # ===============================================
-# MODIFICAR LA FUNCIÓN MAIN() EXISTENTE
+# EJECUTAR LA APLICACIÓN
 # ===============================================
 
-# En tu función main() existente, agregar el routing:
-# 
-# if pagina == "🏠 Consolidador de Archivos":
-#     # Tu código actual del consolidador
-#     
-# elif pagina == "💰 Cálculo de Utilidades":
-#     mostrar_calculo_utilidades()
-#     
-# elif pagina == "💱 Gestión TRM":
-#     mostrar_gestion_trm()
-#     
-# elif pagina == "📊 Dashboard Utilidades":
-#     mostrar_dashboard_utilidades()
-#     
-# elif pagina == "📋 Reportes":
-#     mostrar_reportes()
+if __name__ == "__main__":
+    main()
