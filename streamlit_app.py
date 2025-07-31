@@ -1,4 +1,9 @@
-import streamlit as st
+# Agregar fecha logistics si hay archivo  
+        if logistics_date:
+            consolidated_df['fecha_logistics'] = logistics_date.strftime('%Y-%m-%d')
+            st.success(f"✅ Fecha logistics aplicada: {logistics_date}")
+    else:
+        st.info("📁 No hay archivo Logistics para procesar")import streamlit as st
 import pandas as pd
 import numpy as np
 from supabase import create_client, Client
@@ -151,58 +156,56 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         
         st.info(f"📊 Logistics matches encontrados: {len(logistics_matched)} de {len(logistics_df)}")
         
-        # Agregar columnas de logistics al consolidated_df
-        logistics_columns = {
-            'Guide Number': 'logistics_guide_number',
-            'Order number': 'logistics_order_number', 
-            'Reference': 'logistics_reference',
-            'SAP Code': 'logistics_sap_code',
-            'Invoice': 'logistics_invoice',
-            'Status': 'logistics_status',
-            'FOB': 'logistics_fob',
-            'Unit': 'logistics_unit',
-            'Weight': 'logistics_weight',
-            'Length': 'logistics_length',
-            'Width': 'logistics_width', 
-            'Height': 'logistics_height',
-            'Insurance': 'logistics_insurance',
-            'Logistics': 'logistics_logistics',
-            'Duties Prealert': 'logistics_duties_prealert',
-            'Duties Pay': 'logistics_duties_pay',
-            'Duty Fee': 'logistics_duty_fee',
-            'Saving': 'logistics_saving',
-            'Total': 'logistics_total',
-            'Description': 'logistics_description',
-            'Shipper': 'logistics_shipper',
-            'Phone': 'logistics_phone',
-            'Consignee': 'logistics_consignee',
-            'Identification': 'logistics_identification',
-            'Country': 'logistics_country',
-            'State': 'logistics_state',
-            'City': 'logistics_city',
-            'Address': 'logistics_address',
-            'Master Guide': 'logistics_master_guide',
-            'Tariff Position': 'logistics_tariff_position',
-            'External Id': 'logistics_external_id'
-        }
-        
-        # Inicializar columnas de logistics en consolidated_df
-        for new_col in logistics_columns.values():
-            consolidated_df[new_col] = None
-        
-        # Llenar datos de logistics donde hay match
-        for _, match_row in logistics_matched.iterrows():
-            drapify_idx = match_row['drapify_index']
-            for orig_col, new_col in logistics_columns.items():
-                if orig_col in match_row:
-                    consolidated_df.loc[drapify_idx, new_col] = match_row[orig_col]
-        
-        # Agregar fecha logistics si hay archivo
-        if logistics_date:
-            consolidated_df['fecha_logistics'] = logistics_date.strftime('%Y-%m-%d')
-            st.success(f"✅ Fecha logistics aplicada: {logistics_date}")
-        
-        st.success(f"✅ Logistics consolidado: {len(logistics_matched)} matches aplicados")
+        if len(logistics_matched) > 0:
+            # Agregar columnas de logistics al consolidated_df
+            logistics_columns = {
+                'Guide Number': 'logistics_guide_number',
+                'Order number': 'logistics_order_number', 
+                'Reference': 'logistics_reference',
+                'SAP Code': 'logistics_sap_code',
+                'Invoice': 'logistics_invoice',
+                'Status': 'logistics_status',
+                'FOB': 'logistics_fob',
+                'Unit': 'logistics_unit',
+                'Weight': 'logistics_weight',
+                'Length': 'logistics_length',
+                'Width': 'logistics_width', 
+                'Height': 'logistics_height',
+                'Insurance': 'logistics_insurance',
+                'Logistics': 'logistics_logistics',
+                'Duties Prealert': 'logistics_duties_prealert',
+                'Duties Pay': 'logistics_duties_pay',
+                'Duty Fee': 'logistics_duty_fee',
+                'Saving': 'logistics_saving',
+                'Total': 'logistics_total',
+                'Description': 'logistics_description',
+                'Shipper': 'logistics_shipper',
+                'Phone': 'logistics_phone',
+                'Consignee': 'logistics_consignee',
+                'Identification': 'logistics_identification',
+                'Country': 'logistics_country',
+                'State': 'logistics_state',
+                'City': 'logistics_city',
+                'Address': 'logistics_address',
+                'Master Guide': 'logistics_master_guide',
+                'Tariff Position': 'logistics_tariff_position',
+                'External Id': 'logistics_external_id'
+            }
+            
+            # Inicializar columnas de logistics en consolidated_df
+            for new_col in logistics_columns.values():
+                consolidated_df[new_col] = None
+            
+            # Llenar datos de logistics donde hay match
+            for _, match_row in logistics_matched.iterrows():
+                drapify_idx = match_row['drapify_index']
+                for orig_col, new_col in logistics_columns.items():
+                    if orig_col in match_row and pd.notna(match_row[orig_col]):
+                        consolidated_df.at[drapify_idx, new_col] = match_row[orig_col]
+            
+            st.success(f"✅ Logistics consolidado: {len(logistics_matched)} matches aplicados")
+        else:
+            st.warning("⚠️ No se encontraron matches para Logistics")
     
     # PASO 4: MATCHING CON ADITIONALS (Costos Adicionales Anicam)
     if aditionals_df is not None:
