@@ -7,10 +7,15 @@ from datetime import datetime
 import io
 import time
 
-# NUEVOS IMPORTS PARA UTILIDADES
-from modulo_utilidades import get_calculador_utilidades
-import plotly.express as px
-import plotly.graph_objects as go
+# IMPORTS PARA UTILIDADES (solo si el módulo existe)
+try:
+    from modulo_utilidades import get_calculador_utilidades
+    import plotly.express as px
+    import plotly.graph_objects as go
+    UTILIDADES_AVAILABLE = True
+except ImportError:
+    st.warning("⚠️ Módulo de utilidades no disponible. Algunas funciones estarán deshabilitadas.")
+    UTILIDADES_AVAILABLE = False
 
 # Configuración de la página
 st.set_page_config(
@@ -23,9 +28,13 @@ st.set_page_config(
 # Configuración de Supabase
 @st.cache_resource
 def init_supabase():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_ANON_KEY"]
-    return create_client(url, key)
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_ANON_KEY"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"❌ Error conectando a Supabase: {str(e)}")
+        return None
 
 supabase = init_supabase()
 
@@ -51,7 +60,6 @@ def fix_accents(text):
     
     try:
         # Método principal: decodificar como latin-1 y recodificar como UTF-8
-        # Esto soluciona automáticamente la mayoría de problemas de encoding
         result = text.encode('latin-1').decode('utf-8')
         return result
     except (UnicodeDecodeError, UnicodeEncodeError):
@@ -177,7 +185,6 @@ def apply_formatting(df):
         'logistics_height', 'logistics_insurance', 'logistics_logistics',
         'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
         'logistics_saving', 'logistics_total',
-        # AGREGAR COLUMNAS DE CXP CON SUS NOMBRES REALES DESPUÉS DEL MAPEO
         'cxp_co_aereo', 'cxp_arancel', 'cxp_iva', 'cxp_handling', 
         'cxp_dest_delivery', 'cxp_amt_due', 'cxp_goods_value'
     ]
@@ -506,6 +513,10 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
 # Función para insertar datos en Supabase
 def insert_to_supabase(df):
     """Inserta los datos consolidados en Supabase"""
+    if not supabase:
+        st.error("❌ No hay conexión a Supabase")
+        return 0
+        
     try:
         # Preparar datos para inserción
         records = df.to_dict('records')
@@ -547,6 +558,19 @@ def insert_to_supabase(df):
         st.error(f"Error general: {str(e)}")
         return 0
 
+# NUEVA FUNCIÓN PARA VERIFICAR CONEXIÓN SUPABASE
+def verificar_conexion_supabase():
+    """Verifica que la conexión a Supabase funcione correctamente"""
+    if not supabase:
+        return False, "No se pudo inicializar la conexión"
+    
+    try:
+        # Test simple de conexión
+        result = supabase.table('trm_actual').select('count').execute()
+        return True, "Conexión exitosa"
+    except Exception as e:
+        return False, str(e)
+
 # ===============================================
 # FUNCIÓN PRINCIPAL CON ROUTING
 # ===============================================
@@ -555,22 +579,39 @@ def main():
     st.title("💰 Sistema de Gestión Integral")
     st.markdown("### Consolidación de archivos y cálculo de utilidades")
     
+    # Verificar conexión Supabase al inicio
+    conexion_ok, mensaje_conexion = verificar_conexion_supabase()
+    if not conexion_ok:
+        st.error(f"❌ Error de conexión a Supabase: {mensaje_conexion}")
+        st.stop()
+    
     # Sidebar con navegación expandida
     with st.sidebar:
         st.image("https://via.placeholder.com/150x50/4F46E5/white?text=LOGO", width=150)
         st.markdown("---")
         
+        # Estado de conexión
+        if conexion_ok:
+            st.success("✅ Supabase conectado")
+        else:
+            st.error("❌ Sin conexión BD")
+        
+        st.markdown("---")
+        
         # NAVEGACIÓN EXPANDIDA
-        pagina = st.selectbox(
-            "📋 Navegación",
-            [
-                "🏠 Consolidador de Archivos",
+        opciones_menu = ["🏠 Consolidador de Archivos"]
+        
+        # Solo agregar opciones de utilidades si el módulo está disponible
+        if UTILIDADES_AVAILABLE:
+            opciones_menu.extend([
                 "💰 Cálculo de Utilidades",
                 "💱 Gestión TRM",
-                "📊 Dashboard Utilidades",
-                "📋 Reportes"
-            ]
-        )
+                "📊 Dashboard Utilidades"
+            ])
+        
+        opciones_menu.append("📋 Reportes")
+        
+        pagina = st.selectbox("📋 Navegación", opciones_menu)
         
         st.markdown("---")
         
@@ -587,704 +628,3 @@ def main():
         st.markdown("3. ➕ **Aditionals** (opcional)")
         st.markdown("4. 🏷️ **Calcular Asignacion**")
         st.markdown("5. 💰 **CXP** (opcional)")
-    
-    # ROUTING DE PÁGINAS
-    if pagina == "🏠 Consolidador de Archivos":
-        mostrar_consolidador(processing_mode)
-        
-    elif pagina == "💰 Cálculo de Utilidades":
-        mostrar_calculo_utilidades()
-        
-    elif pagina == "💱 Gestión TRM":
-        mostrar_gestion_trm()
-        
-    elif pagina == "📊 Dashboard Utilidades":
-        mostrar_dashboard_utilidades()
-        
-    elif pagina == "📋 Reportes":
-        mostrar_reportes()
-
-# ===============================================
-# PÁGINA DEL CONSOLIDADOR (TU CÓDIGO ORIGINAL)
-# ===============================================
-
-def mostrar_consolidador(processing_mode):
-    """Página del consolidador de archivos"""
-    
-    # Área principal
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.header("📁 Subir Archivos")
-        
-        drapify_file = st.file_uploader(
-            "1. Archivo Drapify (OBLIGATORIO - Base de datos)",
-            type=['xlsx', 'xls', 'csv'],
-            key="drapify",
-            help="Archivo base con todas las órdenes"
-        )
-        
-        logistics_file = st.file_uploader(
-            "2. Archivo Logistics (opcional)",
-            type=['xlsx', 'xls', 'csv'],
-            key="logistics",
-            help="Costos de Anicam para envíos internacionales"
-        )
-        
-        # Fecha manual para Logistics
-        logistics_date = None
-        if logistics_file:
-            st.markdown("**📅 Fecha de Datos de Logistics:**")
-            col_date1, col_date2 = st.columns([2, 1])
-            
-            with col_date1:
-                logistics_date = st.date_input(
-                    "Fecha de estos datos de Logistics",
-                    value=datetime.now().date(),
-                    help="Esta fecha se usará para reportes y análisis de costos"
-                )
-            
-            with col_date2:
-                if st.button("📅 Usar Hoy", key="use_today"):
-                    logistics_date = datetime.now().date()
-                    st.rerun()
-            
-            st.info(f"💡 Los datos de Logistics se marcarán con fecha: **{logistics_date}**")
-        
-        aditionals_file = st.file_uploader(
-            "3. Archivo Aditionals (opcional)",
-            type=['xlsx', 'xls', 'csv'],
-            key="aditionals",
-            help="Costos adicionales de Anicam"
-        )
-        
-        cxp_file = st.file_uploader(
-            "4. Archivo CXP (opcional)",
-            type=['xlsx', 'xls', 'csv'],
-            key="cxp",
-            help="Costos de Chilexpress"
-        )
-    
-    with col2:
-        st.header("📊 Estado")
-        
-        files_status = {
-            "Drapify": "✅" if drapify_file else "❌",
-            "Logistics": "✅" if logistics_file else "⚪",
-            "Aditionals": "✅" if aditionals_file else "⚪",
-            "CXP": "✅" if cxp_file else "⚪"
-        }
-        
-        for file_type, status in files_status.items():
-            st.write(f"{status} {file_type}")
-        
-        st.markdown("---")
-        
-        if drapify_file:
-            st.success("✅ Listo para procesar")
-        else:
-            st.warning("⚠️ Archivo Drapify requerido")
-    
-    # Botón de procesamiento
-    if st.button("🚀 Procesar Archivos", disabled=not drapify_file, type="primary"):
-        
-        with st.spinner("Procesando archivos según reglas de negocio..."):
-            try:
-                # Leer archivo Drapify
-                if drapify_file.name.endswith('.csv'):
-                    drapify_df = pd.read_csv(drapify_file)
-                else:
-                    drapify_df = pd.read_excel(drapify_file)
-                
-                st.success(f"✅ Drapify cargado: {len(drapify_df)} registros")
-                
-                # Mostrar columnas encontradas en Drapify
-                with st.expander("🔍 Columnas encontradas en Drapify"):
-                    st.write(list(drapify_df.columns))
-                
-                # Leer archivos opcionales
-                logistics_df = None
-                if logistics_file:
-                    if logistics_file.name.endswith('.csv'):
-                        logistics_df = pd.read_csv(logistics_file)
-                    else:
-                        logistics_df = pd.read_excel(logistics_file)
-                    st.success(f"✅ Logistics cargado: {len(logistics_df)} registros")
-                
-                aditionals_df = None
-                if aditionals_file:
-                    if aditionals_file.name.endswith('.csv'):
-                        aditionals_df = pd.read_csv(aditionals_file)
-                    else:
-                        aditionals_df = pd.read_excel(aditionals_file)
-                    st.success(f"✅ Aditionals cargado: {len(aditionals_df)} registros")
-                
-                cxp_df = None
-                if cxp_file:
-                    if cxp_file.name.endswith('.csv'):
-                        cxp_df = pd.read_csv(cxp_file)
-                    else:
-                        cxp_df = pd.read_excel(cxp_file)
-                    st.success(f"✅ CXP cargado: {len(cxp_df)} registros")
-                
-                # Procesar consolidación usando las reglas específicas
-                consolidated_df = process_files_according_to_rules(
-                    drapify_df, logistics_df, aditionals_df, cxp_df, logistics_date
-                )
-                
-                # APLICAR FORMATEOS DESPUÉS DE LA CONSOLIDACIÓN
-                st.header("🎨 Aplicando Formateos")
-                consolidated_df = apply_formatting(consolidated_df)
-                
-                # Mostrar preview de los datos
-                st.header("👀 Preview de Datos Consolidados")
-                st.dataframe(consolidated_df.head(10), use_container_width=True)
-                
-                # Mostrar información adicional sobre formateos
-                st.subheader("📊 Información de Procesamiento")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("**💰 Columnas con formato Currency sin decimales:**")
-                    currency_no_dec = ['unit_price', 'Meli Fee', 'IVA', 'ICA', 'FUENTE', 
-                                      'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount']
-                    for col in currency_no_dec:
-                        if col in consolidated_df.columns:
-                            st.write(f"• {col}")
-                
-                with col2:
-                    st.markdown("**💎 Columnas con formato Currency con decimales:**")
-                    currency_with_dec = ['profit_price', 'Declare Value', 'data_base_price',
-                                        'logistics_fob', 'logistics_weight', 'logistics_total']
-                    for col in currency_with_dec:
-                        if col in consolidated_df.columns:
-                            st.write(f"• {col}")
-                
-                # Mostrar información de fechas
-                if 'fecha_logistics' in consolidated_df.columns:
-                    logistics_dates = consolidated_df['fecha_logistics'].dropna().unique()
-                    if len(logistics_dates) > 0:
-                        st.write(f"📅 **Fecha de Logistics aplicada:** {logistics_dates[0]}")
-                        registros_con_fecha = consolidated_df['fecha_logistics'].notna().sum()
-                        st.write(f"📊 **Registros con fecha Logistics:** {registros_con_fecha}")
-                
-                # Mostrar muestras de fechas formateadas
-                if 'date_created' in consolidated_df.columns:
-                    sample_dates = consolidated_df['date_created'].dropna().head(3).tolist()
-                    st.write(f"📅 **Ejemplos de fechas Drapify:** {sample_dates}")
-                
-                if 'cxp_date' in consolidated_df.columns:
-                    sample_cxp_dates = consolidated_df['cxp_date'].dropna().head(3).tolist()
-                    st.write(f"📅 **Ejemplos de fechas CXP:** {sample_cxp_dates}")
-                
-                # Mostrar estadísticas detalladas
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("Total Registros", len(consolidated_df))
-                
-                with col2:
-                    logistics_matched = 0
-                    if any(col.startswith('logistics_') for col in consolidated_df.columns):
-                        logistics_cols = [col for col in consolidated_df.columns if col.startswith('logistics_')]
-                        if logistics_cols:
-                            logistics_matched = consolidated_df[logistics_cols[0]].notna().sum()
-                    st.metric("Logistics Matched", logistics_matched)
-                
-                with col3:
-                    aditionals_matched = 0
-                    if any(col.startswith('aditionals_') for col in consolidated_df.columns):
-                        aditionals_cols = [col for col in consolidated_df.columns if col.startswith('aditionals_')]
-                        if aditionals_cols:
-                            aditionals_matched = consolidated_df[aditionals_cols[0]].notna().sum()
-                    st.metric("Aditionals Matched", aditionals_matched)
-                
-                with col4:
-                    cxp_matched = 0
-                    if any(col.startswith('cxp_') for col in consolidated_df.columns):
-                        cxp_cols = [col for col in consolidated_df.columns if col.startswith('cxp_')]
-                        if cxp_cols:
-                            cxp_matched = consolidated_df[cxp_cols[0]].notna().sum()
-                    st.metric("CXP Matched", cxp_matched)
-                
-                # Mostrar información de la columna Asignacion
-                if 'Asignacion' in consolidated_df.columns:
-                    st.subheader("🏷️ Análisis de Asignaciones")
-                    asignacion_counts = consolidated_df['Asignacion'].value_counts().head(10)
-                    st.bar_chart(asignacion_counts)
-                
-                # Opción de descarga
-                st.header("💾 Descargar Resultado")
-                
-                csv_buffer = io.StringIO()
-                consolidated_df.to_csv(csv_buffer, index=False)
-                csv_data = csv_buffer.getvalue()
-                
-                st.download_button(
-                    label="📥 Descargar CSV Consolidado",
-                    data=csv_data,
-                    file_name=f"consolidated_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    type="primary"
-                )
-                
-                # Insertar en base de datos si se seleccionó
-                if processing_mode == "Consolidar e insertar en DB":
-                    st.header("💾 Insertar en Base de Datos")
-                    
-                    if st.button("🚀 Insertar en Supabase", type="secondary"):
-                        with st.spinner("Insertando datos en Supabase..."):
-                            inserted_count = insert_to_supabase(consolidated_df)
-                            
-                            if inserted_count > 0:
-                                st.success(f"✅ {inserted_count} registros insertados exitosamente!")
-                                
-                                # Log del procesamiento
-                                try:
-                                    log_data = {
-                                        'file_type': 'consolidated',
-                                        'records_processed': len(consolidated_df),
-                                        'records_matched': inserted_count,
-                                        'status': 'success'
-                                    }
-                                    supabase.table('processing_logs').insert(log_data).execute()
-                                except:
-                                    pass
-                            else:
-                                st.error("❌ Error insertando datos")
-                
-            except Exception as e:
-                st.error(f"❌ Error procesando archivos: {str(e)}")
-                st.exception(e)
-    
-    # Sección de consultas
-    st.markdown("---")
-    st.header("🔍 Consultar Datos Existentes")
-    
-    query_col1, query_col2 = st.columns(2)
-    
-    with query_col1:
-        if st.button("📊 Ver Estadísticas Generales"):
-            try:
-                result = supabase.table('orders').select('account_name').execute()
-                
-                if result.data:
-                    df = pd.DataFrame(result.data)
-                    if 'account_name' in df.columns:
-                        st.subheader("Registros por Account Name")
-                        account_counts = df['account_name'].value_counts()
-                        st.bar_chart(account_counts)
-                        st.dataframe(account_counts.reset_index())
-                    else:
-                        st.info("Datos encontrados pero sin columna account_name")
-                else:
-                    st.info("No hay datos en la base de datos")
-                    
-            except Exception as e:
-                st.error(f"Error consultando estadísticas: {str(e)}")
-    
-    with query_col2:
-        if st.button("📋 Ver Últimos Registros"):
-            try:
-                result = supabase.table('orders').select('*').order('created_at', desc=True).limit(10).execute()
-                
-                if result.data:
-                    recent_df = pd.DataFrame(result.data)
-                    st.subheader("Últimos 10 Registros")
-                    st.dataframe(recent_df, use_container_width=True)
-                else:
-                    st.info("No hay datos en la base de datos")
-                    
-            except Exception as e:
-                st.error(f"Error consultando registros: {str(e)}")
-    
-    # Búsqueda específica
-    st.subheader("🔎 Búsqueda Específica")
-    
-    search_col1, search_col2, search_col3 = st.columns(3)
-    
-    with search_col1:
-        search_order_id = st.text_input("Buscar por Order ID")
-    
-    with search_col2:
-        search_prealert_id = st.text_input("Buscar por Prealert ID")
-    
-    with search_col3:
-        search_account = st.selectbox(
-            "Filtrar por Account",
-            ["Todos", "1-TODOENCARGO-CO", "2-MEGATIENDA SPA", "3-VEENDELO", 
-             "4-MEGA TIENDAS PERUANAS", "5-DETODOPARATODOS", "6-COMPRAFACIL", 
-             "7-COMPRA-YA", "8-FABORCARGO"]
-        )
-    
-    if st.button("🔍 Buscar"):
-        try:
-            query = supabase.table('orders').select('*')
-            
-            if search_order_id:
-                query = query.eq('order_id', search_order_id)
-            
-            if search_prealert_id:
-                query = query.eq('prealert_id', search_prealert_id)
-            
-            if search_account != "Todos":
-                query = query.eq('account_name', search_account)
-            
-            result = query.execute()
-            
-            if result.data:
-                search_df = pd.DataFrame(result.data)
-                st.success(f"✅ Encontrados {len(search_df)} registros")
-                st.dataframe(search_df, use_container_width=True)
-            else:
-                st.warning("No se encontraron registros con los criterios especificados")
-                
-        except Exception as e:
-            st.error(f"Error en la búsqueda: {str(e)}")
-
-# ===============================================
-# PÁGINAS DE UTILIDADES
-# ===============================================
-
-def mostrar_calculo_utilidades():
-    """Página principal de cálculo de utilidades"""
-    st.title("💰 Cálculo de Utilidades")
-    st.markdown("### Procesamiento automático según reglas de negocio")
-    
-    # Obtener calculador
-    try:
-        calculador = get_calculador_utilidades()
-    except Exception as e:
-        st.error(f"❌ Error inicializando calculador: {str(e)}")
-        return
-    
-    # Tabs para organizar funcionalidad
-    tab1, tab2, tab3 = st.tabs(["🔄 Calcular", "📊 Resultados", "⚙️ Configuración"])
-    
-    with tab1:
-        st.subheader("🔄 Calcular Utilidades desde Órdenes Consolidadas")
-        
-        # Opciones de filtrado
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            cuenta_filtro = st.selectbox(
-                "Filtrar por cuenta:",
-                ["Todas", "1-TODOENCARGO-CO", "2-MEGATIENDA SPA", "3-VEENDELO", 
-                 "4-MEGA TIENDAS PERUANAS", "5-DETODOPARATODOS", "6-COMPRAFACIL", 
-                 "7-COMPRA-YA", "8-FABORCARGO"]
-            )
-        
-        with col2:
-            limite_registros = st.number_input(
-                "Límite de registros:", 
-                min_value=10, 
-                max_value=10000, 
-                value=100,
-                step=50
-            )
-        
-        with col3:
-            solo_sin_utilidades = st.checkbox(
-                "Solo órdenes nuevas",
-                value=True,
-                help="Procesar solo órdenes que no tienen utilidades calculadas"
-            )
-        
-        if st.button("🚀 Calcular Utilidades", type="primary", use_container_width=True):
-            with st.spinner("🔄 Obteniendo órdenes consolidadas..."):
-                try:
-                    # Construir query
-                    query = supabase.table('orders').select('*').limit(limite_registros)
-                    
-                    if cuenta_filtro != "Todas":
-                        query = query.eq('account_name', cuenta_filtro)
-                    
-                    # Obtener datos
-                    result = query.execute()
-                    
-                    if result.data:
-                        df_ordenes = pd.DataFrame(result.data)
-                        st.success(f"✅ {len(df_ordenes)} órdenes obtenidas")
-                        
-                        # Mostrar preview
-                        with st.expander("👀 Preview de datos"):
-                            st.dataframe(df_ordenes.head(), use_container_width=True)
-                        
-                        # Verificar columnas necesarias
-                        columnas_necesarias = ['Serial#', 'order_id', 'account_name', 'Declare Value', 'quantity', 'net_real_amount']
-                        columnas_faltantes = [col for col in columnas_necesarias if col not in df_ordenes.columns]
-                        
-                        if columnas_faltantes:
-                            st.error(f"❌ Faltan columnas necesarias: {columnas_faltantes}")
-                            return
-                        
-                        # Calcular utilidades
-                        st.info("🔄 Calculando utilidades...")
-                        df_utilidades = calculador.calcular_utilidades_por_cuenta(df_ordenes)
-                        
-                        # Mostrar resultados
-                        st.success("✅ Utilidades calculadas exitosamente!")
-                        
-                        # Métricas
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        with col1:
-                            total_utilidad = df_utilidades['Utilidad Gss'].sum()
-                            st.metric("💰 Utilidad Total", f"${total_utilidad:,.2f}")
-                        
-                        with col2:
-                            ordenes_positivas = (df_utilidades['Utilidad Gss'] > 0).sum()
-                            st.metric("📈 Órdenes Positivas", ordenes_positivas)
-                        
-                        with col3:
-                            ordenes_negativas = (df_utilidades['Utilidad Gss'] < 0).sum()
-                            st.metric("📉 Órdenes Negativas", ordenes_negativas)
-                        
-                        with col4:
-                            utilidad_promedio = df_utilidades['Utilidad Gss'].mean()
-                            st.metric("📊 Utilidad Promedio", f"${utilidad_promedio:.2f}")
-                        
-                        # Tabla de resultados
-                        st.subheader("📋 Resultados Detallados")
-                        st.dataframe(df_utilidades, use_container_width=True)
-                        
-                        # Gráfico por cuenta
-                        if len(df_utilidades['account_name'].unique()) > 1:
-                            st.subheader("📊 Utilidades por Cuenta")
-                            utilidad_por_cuenta = df_utilidades.groupby('account_name')['Utilidad Gss'].sum().reset_index()
-                            fig = px.bar(utilidad_por_cuenta, x='account_name', y='Utilidad Gss',
-                                       title="Utilidad Total por Cuenta")
-                            st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Opciones de guardado y descarga
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if st.button("💾 Guardar en Base de Datos", use_container_width=True):
-                                if calculador.guardar_utilidades_en_bd(df_utilidades):
-                                    st.success("✅ Utilidades guardadas en base de datos!")
-                                    st.rerun()
-                        
-                        with col2:
-                            csv = df_utilidades.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Descargar CSV",
-                                data=csv,
-                                file_name=f"utilidades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                mime="text/csv",
-                                use_container_width=True
-                            )
-                    
-                    else:
-                        st.warning("⚠️ No se encontraron órdenes con los filtros especificados")
-                
-                except Exception as e:
-                    st.error(f"❌ Error obteniendo órdenes: {str(e)}")
-                    st.exception(e)
-    
-    with tab2:
-        st.subheader("📊 Resultados Guardados")
-        
-        try:
-            # Obtener estadísticas desde la vista
-            result = supabase.table('estadisticas_utilidades').select('*').execute()
-            
-            if result.data:
-                stats_df = pd.DataFrame(result.data)
-                st.dataframe(stats_df, use_container_width=True)
-                
-                # Gráfico de estadísticas
-                fig = px.bar(stats_df, x='account_name', y='utilidad_total_gss',
-                           title="Utilidad Total por Cuenta (Guardadas)")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("📝 No hay utilidades calculadas guardadas aún")
-        
-        except Exception as e:
-            st.error(f"❌ Error cargando estadísticas: {str(e)}")
-    
-    with tab3:
-        st.subheader("⚙️ Configuración del Sistema")
-        
-        # Mostrar TRM actual
-        st.markdown("**💱 TRM Actual:**")
-        for pais, valor in calculador.trm_actual.items():
-            st.write(f"🇺🇸 {pais.title()}: ${valor:,.4f}")
-        
-        st.info("💡 Para cambiar TRM, usar la página 'Gestión TRM'")
-
-def mostrar_gestion_trm():
-    """Página de gestión de TRM"""
-    st.title("💱 Gestión de TRM")
-    st.markdown("### Control de Tasas Representativas del Mercado")
-    
-    try:
-        calculador = get_calculador_utilidades()
-    except Exception as e:
-        st.error(f"❌ Error inicializando calculador: {str(e)}")
-        return
-    
-    # Configuración TRM
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("⚙️ Configurar TRM")
-        
-        col_co, col_pe, col_cl = st.columns(3)
-        
-        with col_co:
-            trm_colombia = st.number_input(
-                "🇨🇴 TRM Colombia (COP/USD)", 
-                value=calculador.trm_actual.get('colombia', 4250.0), 
-                step=0.01,
-                format="%.2f"
-            )
-        
-        with col_pe:
-            trm_peru = st.number_input(
-                "🇵🇪 TRM Perú (PEN/USD)", 
-                value=calculador.trm_actual.get('peru', 3.75), 
-                step=0.01,
-                format="%.2f"
-            )
-        
-        with col_cl:
-            trm_chile = st.number_input(
-                "🇨🇱 TRM Chile (CLP/USD)", 
-                value=calculador.trm_actual.get('chile', 850.0), 
-                step=0.01,
-                format="%.2f"
-            )
-        
-        if st.button("💾 Actualizar TRM", type="primary"):
-            nuevas_trm = {
-                'colombia': trm_colombia,
-                'peru': trm_peru,
-                'chile': trm_chile
-            }
-            
-            if calculador.actualizar_trm(nuevas_trm, "usuario_streamlit"):
-                st.success("✅ TRM actualizada exitosamente!")
-                st.rerun()
-    
-    with col2:
-        st.subheader("📊 Estado TRM")
-        
-        for pais, valor in calculador.trm_actual.items():
-            st.metric(f"🇺🇸 {pais.title()}", f"${valor:,.4f}")
-        
-        st.info("🔄 Última actualización: " + datetime.now().strftime("%H:%M:%S"))
-    
-    # Historial de cambios
-    st.subheader("📋 Historial de Cambios")
-    
-    try:
-        # Obtener historial directamente de Supabase
-        result = supabase.table('trm_history').select('*').order('fecha_cambio', desc=True).limit(20).execute()
-        
-        if result.data:
-            historial_df = pd.DataFrame(result.data)
-            st.dataframe(historial_df, use_container_width=True)
-            
-            # Gráfico de evolución
-            if len(historial_df) > 1:
-                fig = px.line(historial_df, x='fecha_cambio', y='valor_nuevo', 
-                            color='pais', title="Evolución TRM")
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("📝 No hay cambios registrados")
-    
-    except Exception as e:
-        st.error(f"❌ Error cargando historial: {str(e)}")
-
-def mostrar_dashboard_utilidades():
-    """Dashboard de utilidades"""
-    st.title("📊 Dashboard de Utilidades")
-    st.markdown("### Panel de control y métricas")
-    
-    try:
-        # Obtener estadísticas desde la vista
-        result = supabase.table('estadisticas_utilidades').select('*').execute()
-        
-        if result.data:
-            stats_df = pd.DataFrame(result.data)
-            
-            # KPIs principales
-            col1, col2, col3, col4 = st.columns(4)
-            
-            total_utilidad = stats_df['utilidad_total_gss'].sum()
-            total_ordenes = stats_df['total_ordenes'].sum()
-            ordenes_positivas = stats_df['ordenes_positivas'].sum()
-            ordenes_negativas = stats_df['ordenes_negativas'].sum()
-            
-            with col1:
-                st.metric("💰 Utilidad Total", f"${total_utilidad:,.2f}")
-            
-            with col2:
-                st.metric("📦 Total Órdenes", f"{total_ordenes:,}")
-            
-            with col3:
-                st.metric("📈 Órdenes Positivas", f"{ordenes_positivas:,}")
-            
-            with col4:
-                st.metric("📉 Órdenes Negativas", f"{ordenes_negativas:,}")
-            
-            # Gráficos
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📊 Utilidad por Cuenta")
-                fig = px.bar(stats_df, x='account_name', y='utilidad_total_gss',
-                           title="Utilidad Total por Cuenta")
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.subheader("📈 Performance por Cuenta")
-                fig = px.scatter(stats_df, x='total_ordenes', y='utilidad_promedio_gss',
-                               color='account_name', size='utilidad_total_gss',
-                               title="Órdenes vs Utilidad Promedio")
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # Tabla detallada
-            st.subheader("📋 Detalle por Cuenta")
-            st.dataframe(stats_df, use_container_width=True)
-        
-        else:
-            st.info("📝 No hay datos de utilidades para mostrar")
-            st.markdown("💡 Primero calcula utilidades en la página 'Cálculo de Utilidades'")
-    
-    except Exception as e:
-        st.error(f"❌ Error cargando dashboard: {str(e)}")
-
-def mostrar_reportes():
-    """Página de reportes"""
-    st.title("📋 Reportes")
-    st.markdown("### Generación de reportes automáticos")
-    
-    st.info("🚧 Funcionalidad en desarrollo")
-    
-    # Preview de funcionalidad futura
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📊 Tipos de Reportes")
-        st.write("• Reporte Mensual Ejecutivo")
-        st.write("• Análisis Comparativo")
-        st.write("• Tendencias por Cuenta")
-        st.write("• Performance Detallado")
-    
-    with col2:
-        st.subheader("📁 Formatos Disponibles")
-        st.write("• Excel (.xlsx)")
-        st.write("• PDF Ejecutivo")
-        st.write("• CSV Detallado")
-        st.write("• Dashboard Interactivo")
-
-# ===============================================
-# EJECUTAR LA APLICACIÓN
-# ===============================================
-
-if __name__ == "__main__":
-    main()
