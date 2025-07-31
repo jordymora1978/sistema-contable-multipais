@@ -187,6 +187,9 @@ def insert_to_supabase_with_validation(df):
             'System#': 'system_number',
             'Asignacion': 'asignacion',
             
+            # Columnas de cantidad y producto
+            'quantity': 'quantity_drapify',
+            
             # Columnas financieras
             'Declare Value': 'declare_value',
             'Meli Fee': 'meli_fee',
