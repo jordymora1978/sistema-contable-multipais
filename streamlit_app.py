@@ -38,6 +38,230 @@ def clean_id(value):
         str_value = str_value[:-2]
     return str_value if str_value and str_value != 'nan' else None
 
+# Función para corregir acentos y caracteres especiales
+def fix_accents(text):
+    """Corrige automáticamente todos los caracteres con encoding incorrecto UTF-8"""
+    if pd.isna(text) or not isinstance(text, str):
+        return text
+    
+    try:
+        # Primero intentar decodificar como si fuera latin-1 y recodificar como UTF-8
+        # Esto soluciona la mayoría de problemas de encoding
+        result = text.encode('latin-1').decode('utf-8')
+        return result
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        pass
+    
+    # Si el método anterior falla, usar mapeo manual de patrones comunes
+    # Mapeo completo de caracteres mal codificados en UTF-8
+    replacements = {
+        # Vocales con tilde minúsculas
+        'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ã³': 'ó', 'Ãº': 'ú',
+        # Vocales con tilde mayúsculas  
+        'Ã': 'Á', 'Ã‰': 'É', 'Ã': 'Í', 'Ã"': 'Ó', 'Ãš': 'Ú',
+        # Ñ y ñ
+        'Ã±': 'ñ', 'Ã'': 'Ñ',
+        # Ü y ü
+        'Ã¼': 'ü', 'Ãœ': 'Ü',
+        # Otros caracteres especiales
+        'Ã§': 'ç', 'Ã‡': 'Ç',
+        # Diéresis
+        'Ã¤': 'ä', 'Ã«': 'ë', 'Ã¯': 'ï', 'Ã¶': 'ö',
+        'Ã„': 'Ä', 'Ã‹': 'Ë', 'Ã': 'Ï', 'Ã–': 'Ö',
+        # Acentos graves
+        'Ã ': 'à', 'Ã¨': 'è', 'Ã¬': 'ì', 'Ã²': 'ò', 'Ã¹': 'ù',
+        'Ã€': 'À', 'Ãˆ': 'È', 'ÃŒ': 'Ì', 'Ã'': 'Ò', 'Ã™': 'Ù',
+        # Acentos circunflejos
+        'Ã¢': 'â', 'Ãª': 'ê', 'Ã®': 'î', 'Ã´': 'ô', 'Ã»': 'û',
+        'Ã‚': 'Â', 'ÃŠ': 'Ê', 'ÃŽ': 'Î', 'Ã"': 'Ô', 'Ã›': 'Û',
+        # Caracteres especiales adicionales
+        'Ã¿': 'ÿ', 'Ã': 'Ÿ',
+        # Patrones específicos comunes en nombres y lugares
+        'Ã±ez': 'ñez', 'Ã±o': 'ño', 'Ã±a': 'ña',
+        'Ã¡n': 'án', 'Ã©z': 'éz', 'Ã­a': 'ía',
+        'Ã³n': 'ón', 'Ãºl': 'úl',
+        # Patrones para lugares comunes
+        'BogotÃ¡': 'Bogotá', 'MedellÃ­n': 'Medellín', 'CÃ³rdoba': 'Córdoba',
+        'PanamÃ¡': 'Panamá', 'TucumÃ¡n': 'Tucumán', 'CÃ¡diz': 'Cádiz',
+        'MÃ©xico': 'México', 'LeÃ³n': 'León', 'MÃ¡laga': 'Málaga',
+        # Patrones para apellidos comunes
+        'MartÃ­nez': 'Martínez', 'RodrÃ­guez': 'Rodríguez', 'GonzÃ¡lez': 'González',
+        'HernÃ¡ndez': 'Hernández', 'LÃ³pez': 'López', 'GarcÃ­a': 'García',
+        'PÃ©rez': 'Pérez', 'SÃ¡nchez': 'Sánchez', 'RamÃ­rez': 'Ramírez',
+        'FlÃ³rez': 'Flórez', 'VÃ¡squez': 'Vásquez', 'JimÃ©nez': 'Jiménez',
+        # Patrones para nombres comunes
+        'MarÃ­a': 'María', 'JosÃ©': 'José', 'AndrÃ©s': 'Andrés',
+        'MÃ³nica': 'Mónica', 'FabiÃ¡n': 'Fabián', 'AdriÃ¡n': 'Adrián',
+        'SebastiÃ¡n': 'Sebastián', 'NicolÃ¡s': 'Nicolás', 'VictorÃ­a': 'Victoria',
+    }
+    
+    result = str(text)
+    
+    # Aplicar todos los reemplazos
+    for wrong, correct in replacements.items():
+        result = result.replace(wrong, correct)
+    
+    # Patrón adicional: buscar secuencias Ã seguidas de caracteres especiales
+    import re
+    
+    # Patrón para detectar caracteres mal codificados que empiecen con Ã
+    pattern = r'Ã[^\w\s]'
+    matches = re.findall(pattern, result)
+    
+    # Si encontramos patrones sospechosos, intentar otra vez la conversión
+    if matches:
+        try:
+            # Intentar convertir byte por byte
+            result_bytes = result.encode('latin1', errors='ignore')
+            result = result_bytes.decode('utf-8', errors='ignore')
+        except:
+            pass
+    
+    return result
+
+# Función para formatear fechas
+def format_date_to_standard(date_value, input_format='auto'):
+    """Convierte fechas a formato YYYY-MM-DD"""
+    if pd.isna(date_value):
+        return None
+    
+    date_str = str(date_value).strip()
+    
+    if not date_str or date_str == 'nan':
+        return None
+    
+    try:
+        # Si es un número (formato Excel), convertir primero
+        if date_str.replace('.', '').isdigit():
+            # Es un número de serie de Excel
+            excel_date = float(date_str)
+            # Convertir desde 1900-01-01 (Excel epoch)
+            from datetime import datetime, timedelta
+            excel_epoch = datetime(1900, 1, 1)
+            actual_date = excel_epoch + timedelta(days=excel_date - 2)  # -2 por bug histórico de Excel
+            return actual_date.strftime('%Y-%m-%d')
+        
+        # Formato YYYY-MM-DD HH:MM (date_created)
+        if ' ' in date_str and len(date_str) >= 16:
+            date_part = date_str.split(' ')[0]
+            if len(date_part) == 10 and date_part.count('-') == 2:
+                return date_part
+        
+        # Formato MM/DD/YYYY (Date de CXP)
+        if '/' in date_str:
+            parts = date_str.split('/')
+            if len(parts) == 3:
+                month, day, year = parts
+                return f"{year.zfill(4)}-{month.zfill(2)}-{day.zfill(2)}"
+        
+        # Formato YYYY-MM-DD ya correcto
+        if len(date_str) == 10 and date_str.count('-') == 2:
+            return date_str
+            
+        return date_str  # Devolver original si no se puede convertir
+        
+    except Exception:
+        return date_str
+
+# Función para aplicar formato currency sin decimales
+def format_currency_no_decimals(value):
+    """Formatea números como currency sin decimales: $#,##0"""
+    if pd.isna(value):
+        return None
+    try:
+        num_value = float(value)
+        return f"${num_value:,.0f}"
+    except (ValueError, TypeError):
+        return value
+
+# Función para aplicar formato currency con decimales
+def format_currency_with_decimals(value):
+    """Formatea números como currency con decimales: $#,##0.00"""
+    if pd.isna(value):
+        return None
+    try:
+        num_value = float(value)
+        return f"${num_value:,.2f}"
+    except (ValueError, TypeError):
+        return value
+
+# Función para eliminar duplicados por order_id
+def remove_duplicates_by_order_id(df):
+    """Elimina filas duplicadas basándose en order_id, manteniendo la primera ocurrencia"""
+    if 'order_id' not in df.columns:
+        return df
+    
+    initial_count = len(df)
+    
+    # Eliminar duplicados basándose en order_id, manteniendo el primero
+    df_cleaned = df.drop_duplicates(subset=['order_id'], keep='first')
+    
+    duplicates_removed = initial_count - len(df_cleaned)
+    
+    if duplicates_removed > 0:
+        st.warning(f"⚠️ Se eliminaron {duplicates_removed} filas duplicadas basándose en order_id")
+    else:
+        st.success(f"✅ No se encontraron duplicados por order_id")
+    
+    return df_cleaned
+
+# Función para aplicar todos los formateos
+def apply_formatting(df):
+    """Aplica todos los formateos especificados al DataFrame"""
+    
+    st.info("🎨 Aplicando formateos...")
+    
+    # A) Formato Currency sin decimales: $#,##0
+    currency_no_decimals_columns = [
+        'unit_price', 'Meli Fee', 'IVA', 'ICA', 'FUENTE', 
+        'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount'
+    ]
+    
+    for col in currency_no_decimals_columns:
+        if col in df.columns:
+            df[col] = df[col].apply(format_currency_no_decimals)
+            st.write(f"✅ Formato currency sin decimales aplicado a: {col}")
+    
+    # B) Formato currency con decimales: $#,##0.00
+    currency_with_decimals_columns = [
+        'profit_price', 'Declare Value', 'data_base_price',
+        'logistics_fob', 'logistics_weight', 'logistics_length', 'logistics_width',
+        'logistics_height', 'logistics_insurance', 'logistics_logistics',
+        'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
+        'logistics_saving', 'logistics_total'
+    ]
+    
+    for col in currency_with_decimals_columns:
+        if col in df.columns:
+            df[col] = df[col].apply(format_currency_with_decimals)
+            st.write(f"✅ Formato currency con decimales aplicado a: {col}")
+    
+    # C) Corregir acentos en todas las columnas de texto
+    text_columns = df.select_dtypes(include=['object']).columns
+    for col in text_columns:
+        if col not in currency_no_decimals_columns + currency_with_decimals_columns:
+            df[col] = df[col].apply(fix_accents)
+    
+    st.write(f"✅ Acentos corregidos en {len(text_columns)} columnas de texto")
+    
+    # D) Formatear fechas
+    date_columns = {
+        'date_created': 'YYYY-MM-DD HH:MM',
+        'cxp_date': 'MM/DD/YYYY'
+    }
+    
+    for col, format_desc in date_columns.items():
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: format_date_to_standard(x))
+            st.write(f"✅ Formato de fecha aplicado a {col} (era: {format_desc})")
+    
+    # E) Eliminar duplicados por order_id
+    df = remove_duplicates_by_order_id(df)
+    
+    st.success("🎨 Todos los formateos aplicados correctamente")
+    
+    return df
+
 # Función para calcular asignación según las reglas especificadas
 def calculate_asignacion(account_name, serial_number):
     """Calcula la asignación basada en el account_name y serial_number"""
@@ -464,9 +688,43 @@ def main():
                     drapify_df, logistics_df, aditionals_df, cxp_df
                 )
                 
+                # APLICAR FORMATEOS DESPUÉS DE LA CONSOLIDACIÓN
+                st.header("🎨 Aplicando Formateos")
+                consolidated_df = apply_formatting(consolidated_df)
+                
                 # Mostrar preview de los datos
                 st.header("👀 Preview de Datos Consolidados")
                 st.dataframe(consolidated_df.head(10), use_container_width=True)
+                
+                # Mostrar información adicional sobre formateos
+                st.subheader("📊 Información de Formateos Aplicados")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**💰 Columnas con formato Currency sin decimales:**")
+                    currency_no_dec = ['unit_price', 'Meli Fee', 'IVA', 'ICA', 'FUENTE', 
+                                      'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount']
+                    for col in currency_no_dec:
+                        if col in consolidated_df.columns:
+                            st.write(f"• {col}")
+                
+                with col2:
+                    st.markdown("**💎 Columnas con formato Currency con decimales:**")
+                    currency_with_dec = ['profit_price', 'Declare Value', 'data_base_price',
+                                        'logistics_fob', 'logistics_weight', 'logistics_total']
+                    for col in currency_with_dec:
+                        if col in consolidated_df.columns:
+                            st.write(f"• {col}")
+                
+                # Mostrar muestras de fechas formateadas
+                if 'date_created' in consolidated_df.columns:
+                    sample_dates = consolidated_df['date_created'].dropna().head(3).tolist()
+                    st.write(f"📅 **Ejemplos de fechas formateadas (date_created):** {sample_dates}")
+                
+                if 'cxp_date' in consolidated_df.columns:
+                    sample_cxp_dates = consolidated_df['cxp_date'].dropna().head(3).tolist()
+                    st.write(f"📅 **Ejemplos de fechas CXP formateadas:** {sample_cxp_dates}")
                 
                 # Mostrar estadísticas detalladas
                 col1, col2, col3, col4 = st.columns(4)
