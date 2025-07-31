@@ -209,9 +209,40 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     if cxp_df is not None and not cxp_df.empty:
         st.info("💰 Procesando archivo CXP...")
         
+        # Mostrar las columnas del archivo CXP para debugging
+        st.write(f"🔍 Columnas encontradas en CXP: {list(cxp_df.columns)}")
+        
+        # Normalizar nombres de columnas del archivo CXP (soportar ambos formatos)
+        column_mapping = {
+            # Formato archivo pequeño -> formato estándar
+            'OT Number': 'OT Number',
+            'Date': 'Date', 
+            'Ref #': 'Ref #',
+            'Consignee': 'Consignee',
+            'CO Aereo': 'CO Aereo',
+            'Arancel': 'Arancel',
+            'IVA': 'IVA',
+            'Handling': 'Handling',
+            'Dest. Delivery': 'Dest. Delivery',
+            'Amt. Due': 'Amt. Due',
+            'Goods Value': 'Goods Value',
+            
+            # Formato archivo grande -> formato estándar
+            'ot_number': 'OT Number',
+            'date': 'Date',
+            'consignee': 'Consignee', 
+            'co_aereo': 'CO Aereo',
+            'arancel': 'Arancel',
+            'iva': 'IVA',
+            'dest_delivery': 'Dest. Delivery'
+        }
+        
+        # Aplicar mapeo de columnas
+        cxp_df_normalized = cxp_df.rename(columns=column_mapping)
+        
         # Crear diccionario para mapeo rápido de CXP
         cxp_dict = {}
-        for idx, row in cxp_df.iterrows():
+        for idx, row in cxp_df_normalized.iterrows():
             ref_number = clean_id(row.get('Ref #', ''))
             if ref_number:
                 cxp_dict[ref_number] = row
@@ -222,13 +253,17 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         cxp_refs = list(cxp_dict.keys())[:5]
         st.write(f"🔍 Ejemplos de Ref # en CXP: {cxp_refs}")
         
-        # Agregar columnas de CXP
-        cxp_columns = ['OT Number', 'Date', 'Ref #', 'Consignee', 'CO Aereo', 
-                      'Arancel', 'IVA', 'Handling', 'Dest. Delivery', 'Amt. Due', 'Goods Value']
+        # Agregar columnas de CXP (usar todas las columnas disponibles)
+        available_cxp_columns = []
+        standard_cxp_columns = ['OT Number', 'Date', 'Ref #', 'Consignee', 'CO Aereo', 
+                               'Arancel', 'IVA', 'Handling', 'Dest. Delivery', 'Amt. Due', 'Goods Value']
         
-        for col in cxp_columns:
-            if col in cxp_df.columns:
-                consolidated_df[f'cxp_{col.lower().replace(" ", "_").replace("#", "number")}'] = np.nan
+        for col in standard_cxp_columns:
+            if col in cxp_df_normalized.columns:
+                available_cxp_columns.append(col)
+                consolidated_df[f'cxp_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'] = np.nan
+        
+        st.write(f"📊 Columnas CXP que se procesarán: {available_cxp_columns}")
         
         matched_cxp = 0
         
@@ -245,13 +280,13 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
                     cxp_row = cxp_dict[asignacion]
                     matched_cxp += 1
                     
-                    for col in cxp_columns:
-                        if col in cxp_df.columns:
-                            consolidated_df.loc[idx, f'cxp_{col.lower().replace(" ", "_").replace("#", "number")}'] = cxp_row.get(col)
+                    for col in available_cxp_columns:
+                        col_name = f'cxp_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'
+                        consolidated_df.loc[idx, col_name] = cxp_row.get(col)
                     
                     # Debug: mostrar algunos matches
                     if matched_cxp <= 5:
-                        st.write(f"✅ CXP Match {matched_cxp}: Asignacion {asignacion} encontrada")
+                        st.write(f"✅ CXP Match {matched_cxp}: Asignacion '{asignacion}' encontrada")
         
         st.success(f"✅ CXP procesado: {matched_cxp} matches por Asignacion")
     
