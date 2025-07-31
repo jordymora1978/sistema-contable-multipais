@@ -601,7 +601,10 @@ def insert_to_supabase(df):
         # Limpiar valores NaN y convertir tipos de datos
         for record in records:
             for key, value in record.items():
-                if pd.isna(value):
+                # Preservar columnas CXP como texto (mantener formato original)
+                if key.startswith('cxp_') and isinstance(value, str):
+                    record[key] = value  # Mantener como texto
+                elif pd.isna(value):
                     record[key] = None
                 elif isinstance(value, (np.integer, np.floating)):
                     if np.isfinite(value):
