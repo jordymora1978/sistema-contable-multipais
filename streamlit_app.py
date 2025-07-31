@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 import io
 import time
+import re
 
 # Configuración de la página
 st.set_page_config(
@@ -32,6 +33,103 @@ try:
     st.sidebar.success("✅ Conectado a Supabase")
 except Exception as e:
     st.sidebar.error(f"❌ Error de conexión: {str(e)}")
+
+# NUEVAS FUNCIONES DE FORMATO Y LIMPIEZA
+
+def fix_encoding(text):
+    """Corrige caracteres mal codificados automáticamente"""
+    if pd.isna(text) or not isinstance(text, str):
+        return text
+    
+    try:
+        # Intentar corregir encoding automáticamente si contiene caracteres problemáticos
+        if 'Ã' in text:
+            # Codificar como latin-1 y decodificar como utf-8
+            fixed = text.encode('latin-1').decode('utf-8')
+            return fixed
+    except:
+        pass
+    
+    return text
+
+def format_currency_no_decimals(value):
+    """Formato currency sin decimales: $#,##0"""
+    if pd.isna(value):
+        return None
+    try:
+        # Convertir a número y redondear
+        num_value = float(value)
+        rounded_value = round(num_value)
+        return f"${rounded_value:,}"
+    except:
+        return value
+
+def format_currency_with_decimals(value):
+    """Formato currency con decimales: $#,##0.00"""
+    if pd.isna(value):
+        return None
+    try:
+        # Convertir a número manteniendo decimales
+        num_value = float(value)
+        return f"${num_value:,.2f}"
+    except:
+        return value
+
+def format_date_standard(date_value, input_format="auto"):
+    """Convierte fechas a formato YYYY-MM-DD usando manipulación de strings"""
+    if pd.isna(date_value) or date_value == "":
+        return None
+    
+    date_str = str(date_value).strip()
+    
+    try:
+        # Formato: YYYY-MM-DD HH:MM (2025-07-21 21:49) -> YYYY-MM-DD
+        if re.match(r'\d{4}-\d{2}-\d{2}\s', date_str):
+            return date_str.split(' ')[0]
+        
+        # Formato: MM/DD/YYYY (07/23/2025) -> YYYY-MM-DD
+        if re.match(r'\d{1,2}/\d{1,2}/\d{4}', date_str):
+            parts = date_str.split('/')
+            if len(parts) == 3:
+                month = parts[0].zfill(2)
+                day = parts[1].zfill(2)
+                year = parts[2]
+                return f"{year}-{month}-{day}"
+        
+        # Si ya está en formato YYYY-MM-DD, devolverlo como está
+        if re.match(r'\d{4}-\d{2}-\d{2}$', date_str):
+            return date_str
+            
+    except:
+        pass
+    
+    return date_str  # Si no se puede convertir, devolver original
+
+def check_existing_data():
+    """Verifica si hay datos existentes en la tabla"""
+    try:
+        result = supabase.table('consolidated_orders').select('id').limit(1).execute()
+        return len(result.data) > 0
+    except:
+        return False
+
+def clear_existing_data():
+    """Elimina todos los registros existentes de las tablas"""
+    try:
+        # Limpiar tablas usando SQL directo
+        supabase.postgrest.session.post(
+            f"{supabase.url}/rest/v1/rpc/truncate_tables"
+        )
+        return True
+    except:
+        try:
+            # Método alternativo: eliminar registros
+            supabase.table('consolidated_orders').delete().neq('id', 0).execute()
+            supabase.table('processing_logs').delete().neq('id', 0).execute()
+            return True
+        except Exception as e:
+            st.error(f"Error limpiando datos: {str(e)}")
+            return False
 
 # Función para limpiar y normalizar IDs
 def clean_id(value):
@@ -145,6 +243,61 @@ def map_column_names(df):
     renamed_df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
     return renamed_df
 
+# NUEVA FUNCIÓN: Aplicar formatos a los datos consolidados
+def apply_data_formatting(df):
+    """Aplica todos los formatos requeridos al DataFrame consolidado"""
+    
+    st.info("🎨 Aplicando formatos de datos...")
+    
+    # A) Formato Currency sin decimales: $#,##0
+    currency_no_decimals_columns = [
+        'unit_price', 'meli_fee', 'iva', 'ica', 'fuente', 
+        'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount'
+    ]
+    
+    for col in currency_no_decimals_columns:
+        if col in df.columns:
+            df[col] = df[col].apply(format_currency_no_decimals)
+    
+    # B) Formato Currency con decimales: $#,##0.00
+    currency_with_decimals_columns = [
+        'profit_price', 'declare_value', 'data_base_price',
+        'logistics_fob', 'logistics_weight', 'logistics_length', 'logistics_width', 
+        'logistics_height', 'logistics_insurance', 'logistics_logistics',
+        'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
+        'logistics_saving', 'logistics_total'
+    ]
+    
+    for col in currency_with_decimals_columns:
+        if col in df.columns:
+            df[col] = df[col].apply(format_currency_with_decimals)
+    
+    # C) Corregir encoding en columnas de texto
+    text_columns = [
+        'client_first_name', 'client_last_name', 'title', 'address_line', 
+        'street_name', 'city', 'state', 'country', 'nombre_del_tercero',
+        'direccion', 'apelido_del_tercero', 'estado', 'razon_social', 'ciudad',
+        'logistics_description', 'logistics_shipper', 'logistics_consignee',
+        'logistics_country', 'logistics_state', 'logistics_city', 'logistics_address'
+    ]
+    
+    for col in text_columns:
+        if col in df.columns:
+            df[col] = df[col].apply(fix_encoding)
+    
+    # D) Formatear fechas
+    date_columns = {
+        'date_created': 'datetime',  # YYYY-MM-DD HH:MM
+        'cxp_date': 'cxp_format'     # MM/DD/YYYY del archivo CXP
+    }
+    
+    for col, format_type in date_columns.items():
+        if col in df.columns:
+            df[col] = df[col].apply(format_date_standard)
+    
+    st.success("✅ Formatos aplicados correctamente")
+    return df
+
 # Función principal para procesar archivos según las reglas especificadas
 def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_df=None, cxp_df=None):
     """
@@ -154,6 +307,7 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     3. Aditionals: buscar prealert_id en Order Id
     4. Calcular Asignacion
     5. CXP: buscar Asignacion en Ref #
+    6. Aplicar formatos y validaciones
     """
     
     st.info("🔄 Iniciando consolidación según reglas especificadas...")
@@ -371,6 +525,24 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         
         st.success(f"✅ CXP procesado: {matched_cxp} matches por Asignacion")
     
+    # PASO 6: Aplicar formatos y validaciones
+    consolidated_df = apply_data_formatting(consolidated_df)
+    
+    # PASO 7: Validación de duplicados por order_id
+    st.info("🔍 Validando duplicados por order_id...")
+    
+    if 'order_id' in consolidated_df.columns:
+        initial_count = len(consolidated_df)
+        # Eliminar duplicados manteniendo el primer registro
+        consolidated_df = consolidated_df.drop_duplicates(subset=['order_id'], keep='first')
+        final_count = len(consolidated_df)
+        
+        if initial_count != final_count:
+            removed_count = initial_count - final_count
+            st.warning(f"⚠️ Se removieron {removed_count} registros duplicados por order_id")
+        else:
+            st.success("✅ No se encontraron duplicados por order_id")
+    
     st.success(f"🎉 Consolidación completada: {len(consolidated_df)} registros finales")
     return consolidated_df
 
@@ -423,10 +595,10 @@ def insert_to_supabase(df):
                     else:
                         record[key] = None
         
-        # Verificar duplicados por order_id
+        # Verificación adicional de duplicados por order_id
         order_ids = [r.get('order_id') for r in records if r.get('order_id')]
         if len(set(order_ids)) != len(order_ids):
-            st.warning(f"⚠️ Detectados duplicados en order_id. Removiendo duplicados...")
+            st.warning(f"⚠️ Detectados duplicados en order_id durante inserción. Removiendo duplicados...")
             seen_order_ids = set()
             unique_records = []
             for record in records:
@@ -435,7 +607,7 @@ def insert_to_supabase(df):
                     seen_order_ids.add(order_id)
                     unique_records.append(record)
             records = unique_records
-            st.info(f"✅ Registros únicos: {len(records)}")
+            st.info(f"✅ Registros únicos para insertar: {len(records)}")
         
         # Insertar en lotes
         batch_size = 50
@@ -487,26 +659,46 @@ def insert_to_supabase(df):
 # Interfaz principal
 def main():
     st.title("📦 Consolidador de Órdenes")
-    st.markdown("### Procesa y consolida archivos según reglas específicas de negocio")
+    st.markdown("### Procesa y consolida archivos con formatos profesionales")
     
     # Sidebar con información
     with st.sidebar:
         st.header("⚙️ Configuración")
         
+        # Verificar si hay datos existentes
+        has_existing_data = check_existing_data()
+        
+        if has_existing_data:
+            st.warning("⚠️ Hay datos existentes en la BD")
+            clear_data = st.checkbox(
+                "🗑️ Limpiar datos existentes antes de procesar",
+                value=True,
+                help="Recomendado para evitar duplicados y aplicar nuevos formatos"
+            )
+        else:
+            st.success("✅ Base de datos limpia")
+            clear_data = False
+        
         st.info("💾 Los datos se guardarán automáticamente en la base de datos")
         
         st.markdown("---")
-        st.markdown("**📋 Orden de procesamiento:**")
+        st.markdown("**📋 Procesamiento mejorado:**")
         st.markdown("1. 📋 **Drapify** (base - obligatorio)")
         st.markdown("2. 🚚 **Logistics** (opcional)")
-        st.markdown("   - Match: order_id → Reference")
-        st.markdown("   - Fallback: prealert_id → Order number")
         st.markdown("3. ➕ **Aditionals** (opcional)")
-        st.markdown("   - Match: prealert_id → Order Id")
         st.markdown("4. 🏷️ **Calcular Asignacion**")
         st.markdown("5. 💰 **CXP** (opcional)")
-        st.markdown("   - Match: Asignacion → Ref #")
-        st.markdown("6. 💾 **Guardar en Base de Datos**")
+        st.markdown("6. 🎨 **Aplicar formatos profesionales**")
+        st.markdown("7. 🔍 **Validar duplicados**")
+        st.markdown("8. 💾 **Guardar en Base de Datos**")
+        
+        st.markdown("---")
+        st.markdown("**🎨 Formatos aplicados:**")
+        st.markdown("• **Currency** sin decimales")
+        st.markdown("• **Currency** con decimales")
+        st.markdown("• **Fechas** formato estándar")
+        st.markdown("• **Acentos** corregidos automáticamente")
+        st.markdown("• **Duplicados** eliminados")
     
     # Área principal
     col1, col2 = st.columns([2, 1])
@@ -563,10 +755,18 @@ def main():
             st.warning("⚠️ Archivo Drapify requerido")
     
     # Botón de procesamiento
-    if st.button("🚀 Procesar y Guardar en BD", disabled=not drapify_file, type="primary"):
+    if st.button("🚀 Procesar con Formatos Profesionales", disabled=not drapify_file, type="primary"):
         
-        with st.spinner("Procesando archivos y guardando en base de datos..."):
+        with st.spinner("Procesando archivos con formatos profesionales..."):
             try:
+                # Limpiar datos existentes si se seleccionó
+                if clear_data and has_existing_data:
+                    st.info("🗑️ Limpiando datos existentes...")
+                    if clear_existing_data():
+                        st.success("✅ Datos existentes eliminados")
+                    else:
+                        st.warning("⚠️ No se pudieron eliminar completamente los datos existentes")
+                
                 # Leer archivo Drapify
                 if drapify_file.name.endswith('.csv'):
                     drapify_df = pd.read_csv(drapify_file)
@@ -610,7 +810,7 @@ def main():
                 )
                 
                 # Mostrar preview de los datos
-                st.header("👀 Preview de Datos Consolidados")
+                st.header("👀 Preview de Datos Consolidados con Formatos")
                 st.dataframe(consolidated_df.head(10), use_container_width=True)
                 
                 # Mostrar estadísticas detalladas
@@ -652,7 +852,7 @@ def main():
                 # Guardar automáticamente en base de datos
                 st.header("💾 Guardando en Base de Datos")
                 
-                with st.spinner("Insertando datos en Supabase..."):
+                with st.spinner("Insertando datos con formatos profesionales en Supabase..."):
                     inserted_count = insert_to_supabase(consolidated_df)
                     
                     if inserted_count > 0:
@@ -675,9 +875,9 @@ def main():
                 csv_data = csv_buffer.getvalue()
                 
                 st.download_button(
-                    label="📥 Descargar CSV Consolidado",
+                    label="📥 Descargar CSV con Formatos Profesionales",
                     data=csv_data,
-                    file_name=f"consolidated_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"consolidated_orders_formatted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     type="secondary"
                 )
