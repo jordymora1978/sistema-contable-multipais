@@ -288,9 +288,8 @@ def apply_display_formatting(df):
     currency_no_decimals_columns = [
         'unit_price', 'meli_fee', 'iva', 'ica', 'fuente', 
         'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount',
-        'order_cost', 'Meli Fee', 'IVA', 'ICA', 'FUENTE',
-        'cxp_ot_number', 'cxp_co_aereo', 'cxp_arancel', 'cxp_iva', 
-        'cxp_handling', 'cxp_dest_delivery', 'cxp_amt_due', 'cxp_goods_value'
+        'order_cost', 'Meli Fee', 'IVA', 'ICA', 'FUENTE'
+        # NOTA: Columnas CXP se mantienen con formato original del archivo
     ]
     
     for col in currency_no_decimals_columns:
