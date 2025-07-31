@@ -117,7 +117,7 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     consolidated_df = drapify_df.copy()
     st.success(f"✅ Drapify procesado: {len(consolidated_df)} registros")
     
-    # PASO 2: Calcular Asignacion
+    # PASO 2: Calcular Asignacion - CORREGIDO CON NOMBRES REALES
     if 'account_name' in consolidated_df.columns and 'serial_number' in consolidated_df.columns:
         consolidated_df['asignacion'] = consolidated_df.apply(
             lambda row: calculate_asignacion(row['account_name'], row['serial_number']), 
@@ -762,12 +762,12 @@ def mostrar_dashboard_utilidades():
     
     with col1:
         st.markdown("**🔝 Top 10 Mejores Utilidades**")
-                    top_utilidades = utilidades_df.nlargest(10, 'Utilidad Gss')[['serial_number', 'account_name', 'Utilidad Gss']]
+        top_utilidades = utilidades_df.nlargest(10, 'Utilidad Gss')[['serial_number', 'account_name', 'Utilidad Gss']]
         st.dataframe(top_utilidades, use_container_width=True)
     
     with col2:
         st.markdown("**🔻 Top 10 Peores Utilidades**")
-                    bottom_utilidades = utilidades_df.nsmallest(10, 'Utilidad Gss')[['serial_number', 'account_name', 'Utilidad Gss']]
+        bottom_utilidades = utilidades_df.nsmallest(10, 'Utilidad Gss')[['serial_number', 'account_name', 'Utilidad Gss']]
         st.dataframe(bottom_utilidades, use_container_width=True)
 
 def mostrar_reportes():
