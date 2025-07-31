@@ -237,7 +237,7 @@ def calculate_asignacion(account_name, serial_number):
     return f"{prefix}{clean_serial}" if prefix else clean_serial
 
 # Función principal para procesar archivos según las reglas especificadas
-def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_df=None, cxp_df=None):
+def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_df=None, cxp_df=None, logistics_date=None):
     """
     Procesa y consolida todos los archivos según las reglas exactas especificadas:
     1. Drapify como base
@@ -245,6 +245,9 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     3. Aditionals: buscar prealert_id en Order Id
     4. Calcular Asignacion
     5. CXP: buscar Asignacion en Ref #
+    
+    Args:
+        logistics_date: Fecha manual asignada a los datos de Logistics
     """
     
     st.info("🔄 Iniciando consolidación según reglas especificadas...")
@@ -256,6 +259,10 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     # PASO 2: Procesar archivo Logistics si está disponible
     if logistics_df is not None and not logistics_df.empty:
         st.info("🚚 Procesando archivo Logistics...")
+        
+        # Mostrar la fecha asignada
+        if logistics_date:
+            st.info(f"📅 Fecha asignada a Logistics: **{logistics_date}**")
         
         # Crear diccionario para mapeo rápido de Logistics
         logistics_dict_by_reference = {}
@@ -288,6 +295,9 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
             if col in logistics_df.columns:
                 consolidated_df[f'logistics_{col.lower().replace(" ", "_")}'] = np.nan
         
+        # Agregar la columna de fecha de Logistics
+        consolidated_df['fecha_logistics'] = None
+        
         matched_by_order_id = 0
         matched_by_prealert_id = 0
         
@@ -318,11 +328,18 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
                     if col in logistics_df.columns:
                         consolidated_df.loc[idx, f'logistics_{col.lower().replace(" ", "_")}'] = logistics_row.get(col)
                 
+                # Asignar la fecha de Logistics configurada
+                if logistics_date:
+                    consolidated_df.loc[idx, 'fecha_logistics'] = logistics_date.strftime('%Y-%m-%d')
+                
                 # Debug: mostrar algunos matches
                 if (matched_by_order_id + matched_by_prealert_id) <= 5:
                     st.write(f"✅ Match {matched_by_order_id + matched_by_prealert_id}: {match_type} - order_id: {order_id}, prealert_id: {prealert_id}")
         
         st.success(f"✅ Logistics procesado: {matched_by_order_id} matches por order_id, {matched_by_prealert_id} matches por prealert_id")
+    else:
+        # Si no hay archivo Logistics, agregar la columna vacía para consistencia
+        consolidated_df['fecha_logistics'] = None
     
     # PASO 3: Procesar archivo Aditionals si está disponible
     if aditionals_df is not None and not aditionals_df.empty:
@@ -554,6 +571,26 @@ def main():
             key="logistics",
             help="Costos de Anicam para envíos internacionales"
         )
+        
+        # NUEVA FUNCIONALIDAD: Fecha manual para Logistics
+        logistics_date = None
+        if logistics_file:
+            st.markdown("**📅 Fecha de Datos de Logistics:**")
+            col_date1, col_date2 = st.columns([2, 1])
+            
+            with col_date1:
+                logistics_date = st.date_input(
+                    "Fecha de estos datos de Logistics",
+                    value=datetime.now().date(),
+                    help="Esta fecha se usará para reportes y análisis de costos"
+                )
+            
+            with col_date2:
+                if st.button("📅 Usar Hoy", key="use_today"):
+                    logistics_date = datetime.now().date()
+                    st.rerun()
+            
+            st.info(f"💡 Los datos de Logistics se marcarán con fecha: **{logistics_date}**")
         
         aditionals_file = st.file_uploader(
             "3. Archivo Aditionals (opcional)",
