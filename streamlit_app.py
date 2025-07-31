@@ -15,14 +15,23 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Configuración de Supabase
+# Configuración de Supabase con credenciales integradas
 @st.cache_resource
 def init_supabase():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_ANON_KEY"]
+    # Configuración del nuevo proyecto Supabase
+    url = "https://pvbzzpeyhhxexyabizbv.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2Ynp6cGV5aGh4ZXh5YWJpemJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5OTc5ODcsImV4cCI6MjA2OTU3Mzk4N30.06S8jDjNReAd6Oj8AZvOS2PUcO2ASJHVA3VUNYVeAR4"
     return create_client(url, key)
 
 supabase = init_supabase()
+
+# Test de conexión al inicio
+try:
+    # Verificar conexión con la nueva tabla
+    test_result = supabase.table('consolidated_orders').select('id').limit(1).execute()
+    st.sidebar.success("✅ Conectado a Supabase")
+except Exception as e:
+    st.sidebar.error(f"❌ Error de conexión: {str(e)}")
 
 # Función para limpiar y normalizar IDs
 def clean_id(value):
@@ -63,6 +72,78 @@ def calculate_asignacion(account_name, serial_number):
     
     prefix = account_mapping.get(account_name, '')
     return f"{prefix}{clean_serial}" if prefix else clean_serial
+
+# Función para mapear nombres de columnas del CSV a la base de datos
+def map_column_names(df):
+    """Mapea nombres de columnas del CSV a los nombres de la base de datos"""
+    column_mapping = {
+        # Columnas del sistema (se manejan automáticamente)
+        # Columnas de Drapify
+        'System#': 'system_number',
+        'Serial#': 'serial_number',
+        'order_id': 'order_id',
+        'pack_id': 'pack_id',
+        'ASIN': 'asin',
+        'client_first_name': 'client_first_name',
+        'client_last_name': 'client_last_name',
+        'client_doc_id': 'client_doc_id',
+        'account_name': 'account_name',
+        'date_created': 'date_created',
+        'quantity': 'quantity',
+        'title': 'title',
+        'unit_price': 'unit_price',
+        'logistic_type': 'logistic_type',
+        'address_line': 'address_line',
+        'street_name': 'street_name',
+        'street_number': 'street_number',
+        'city': 'city',
+        'state': 'state',
+        'country': 'country',
+        'receiver_phone': 'receiver_phone',
+        'amz_order_id': 'amz_order_id',
+        'prealert_id': 'prealert_id',
+        'ETIQUETA_ENVIO': 'etiqueta_envio',
+        'order_status_meli': 'order_status_meli',
+        'Declare Value': 'declare_value',
+        'Meli Fee': 'meli_fee',
+        'IVA': 'iva',
+        'ICA': 'ica',
+        'FUENTE': 'fuente',
+        'senders_cost': 'senders_cost',
+        'gross_amount': 'gross_amount',
+        'net_received_amount': 'net_received_amount',
+        'nombre_del_tercero': 'nombre_del_tercero',
+        'direccion': 'direccion',
+        'apelido_del_tercero': 'apelido_del_tercero',
+        'Estado': 'estado',
+        'razon_social': 'razon_social',
+        'Ciudad': 'ciudad',
+        'Numero de documento': 'numero_de_documento',
+        'digital_verification': 'digital_verification',
+        'tipo': 'tipo',
+        'telefono': 'telefono',
+        'giro': 'giro',
+        'correo': 'correo',
+        'net_real_amount': 'net_real_amount',
+        'logistic_weight_lbs': 'logistic_weight_lbs',
+        'refunded_date': 'refunded_date',
+        
+        # Columnas de Logistics (ya tienen prefijo logistics_)
+        # Se mantienen como están
+        
+        # Columnas de Aditionals (ya tienen prefijo aditionals_)
+        # Se mantienen como están
+        
+        # Asignacion
+        'Asignacion': 'asignacion',
+        
+        # Columnas de CXP (ya tienen prefijo cxp_)
+        # Se mantienen como están
+    }
+    
+    # Aplicar mapeo solo a las columnas que existen
+    renamed_df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+    return renamed_df
 
 # Función principal para procesar archivos según las reglas especificadas
 def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_df=None, cxp_df=None):
@@ -108,7 +189,7 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
             'Insurance', 'Logistics', 'Duties Prealert', 'Duties Pay', 
             'Duty Fee', 'Saving', 'Total', 'Description', 'Shipper', 'Phone',
             'Consignee', 'Identification', 'Country', 'State', 'City', 
-            'Address', 'Phone', 'Master Guide', 'Tariff Position', 'External Id', 'Invoice'
+            'Address', 'Master Guide', 'Tariff Position', 'External Id', 'Invoice'
         ]
         
         # Inicializar columnas de Logistics con NaN
@@ -295,20 +376,71 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
 
 # Función para insertar datos en Supabase
 def insert_to_supabase(df):
-    """Inserta los datos consolidados en Supabase"""
+    """Inserta los datos consolidados en Supabase con validación de duplicados"""
     try:
-        # Preparar datos para inserción
-        records = df.to_dict('records')
+        st.info("🔍 Preparando datos para inserción...")
         
-        # Limpiar valores NaN
+        # Mapear nombres de columnas del CSV a la base de datos
+        df_mapped = map_column_names(df)
+        
+        # Filtrar solo las columnas que existen en la tabla de la base de datos
+        # Estas son las columnas que definimos en la tabla SQL
+        db_columns = [
+            'system_number', 'serial_number', 'order_id', 'pack_id', 'asin',
+            'client_first_name', 'client_last_name', 'client_doc_id', 'account_name',
+            'date_created', 'quantity', 'title', 'unit_price', 'logistic_type',
+            'address_line', 'street_name', 'street_number', 'city', 'state', 'country',
+            'receiver_phone', 'amz_order_id', 'prealert_id', 'etiqueta_envio',
+            'order_status_meli', 'declare_value', 'meli_fee', 'iva', 'ica', 'fuente',
+            'senders_cost', 'gross_amount', 'net_received_amount', 'nombre_del_tercero',
+            'direccion', 'apelido_del_tercero', 'estado', 'razon_social', 'ciudad',
+            'numero_de_documento', 'digital_verification', 'tipo', 'telefono', 'giro',
+            'correo', 'net_real_amount', 'logistic_weight_lbs', 'refunded_date',
+            'asignacion'
+        ]
+        
+        # Agregar columnas de logistics, aditionals y cxp que existan
+        for col in df_mapped.columns:
+            if (col.startswith('logistics_') or col.startswith('aditionals_') or col.startswith('cxp_')) and col not in db_columns:
+                db_columns.append(col)
+        
+        # Filtrar DataFrame para incluir solo columnas que existen en la DB
+        df_filtered = df_mapped[[col for col in db_columns if col in df_mapped.columns]]
+        
+        st.info(f"📊 Preparando {len(df_filtered)} registros con {len(df_filtered.columns)} columnas")
+        
+        # Preparar datos para inserción
+        records = df_filtered.to_dict('records')
+        
+        # Limpiar valores NaN y convertir tipos de datos
         for record in records:
             for key, value in record.items():
                 if pd.isna(value):
                     record[key] = None
+                elif isinstance(value, (np.integer, np.floating)):
+                    if np.isfinite(value):
+                        record[key] = float(value) if isinstance(value, np.floating) else int(value)
+                    else:
+                        record[key] = None
+        
+        # Verificar duplicados por order_id
+        order_ids = [r.get('order_id') for r in records if r.get('order_id')]
+        if len(set(order_ids)) != len(order_ids):
+            st.warning(f"⚠️ Detectados duplicados en order_id. Removiendo duplicados...")
+            seen_order_ids = set()
+            unique_records = []
+            for record in records:
+                order_id = record.get('order_id')
+                if order_id not in seen_order_ids:
+                    seen_order_ids.add(order_id)
+                    unique_records.append(record)
+            records = unique_records
+            st.info(f"✅ Registros únicos: {len(records)}")
         
         # Insertar en lotes
         batch_size = 50
         total_inserted = 0
+        errors = []
         
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -325,11 +457,26 @@ def insert_to_supabase(df):
                 status_text.text(f"Insertando: {total_inserted}/{len(records)} registros")
                 
             except Exception as batch_error:
-                st.error(f"Error en lote {i//batch_size + 1}: {str(batch_error)}")
+                error_msg = f"Error en lote {i//batch_size + 1}: {str(batch_error)}"
+                st.error(error_msg)
+                errors.append(error_msg)
                 continue
         
         progress_bar.progress(1.0)
         status_text.text(f"✅ Completado: {total_inserted} registros insertados")
+        
+        # Log del procesamiento
+        try:
+            log_data = {
+                'file_type': 'consolidated',
+                'records_processed': len(records),
+                'records_matched': total_inserted,
+                'status': 'success' if not errors else 'partial_success',
+                'error_message': '; '.join(errors) if errors else None
+            }
+            supabase.table('processing_logs').insert(log_data).execute()
+        except Exception as log_error:
+            st.warning(f"Error logging process: {str(log_error)}")
         
         return total_inserted
         
@@ -529,18 +676,7 @@ def main():
                             
                             if inserted_count > 0:
                                 st.success(f"✅ {inserted_count} registros insertados exitosamente!")
-                                
-                                # Log del procesamiento
-                                try:
-                                    log_data = {
-                                        'file_type': 'consolidated',
-                                        'records_processed': len(consolidated_df),
-                                        'records_matched': inserted_count,
-                                        'status': 'success'
-                                    }
-                                    supabase.table('processing_logs').insert(log_data).execute()
-                                except:
-                                    pass
+                                st.balloons()
                             else:
                                 st.error("❌ Error insertando datos")
                 
@@ -577,7 +713,7 @@ def main():
     with query_col2:
         if st.button("📋 Ver Últimos Registros"):
             try:
-                result = supabase.table('consolidated_orders').select('*').order('created_at', desc=True).limit(10).execute()
+                result = supabase.table('consolidated_orders').select('*').order('id', desc=True).limit(10).execute()
                 
                 if result.data:
                     recent_df = pd.DataFrame(result.data)
