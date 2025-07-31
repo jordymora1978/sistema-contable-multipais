@@ -243,34 +243,11 @@ def map_column_names(df):
     renamed_df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
     return renamed_df
 
-# NUEVA FUNCIÓN: Aplicar formatos a los datos consolidados
-def apply_data_formatting(df):
-    """Aplica todos los formatos requeridos al DataFrame consolidado"""
+# NUEVA FUNCIÓN: Aplicar solo formatos no monetarios (para BD)
+def apply_basic_formatting(df):
+    """Aplica formatos básicos sin afectar campos numéricos para BD"""
     
-    st.info("🎨 Aplicando formatos de datos...")
-    
-    # A) Formato Currency sin decimales: $#,##0
-    currency_no_decimals_columns = [
-        'unit_price', 'meli_fee', 'iva', 'ica', 'fuente', 
-        'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount'
-    ]
-    
-    for col in currency_no_decimals_columns:
-        if col in df.columns:
-            df[col] = df[col].apply(format_currency_no_decimals)
-    
-    # B) Formato Currency con decimales: $#,##0.00
-    currency_with_decimals_columns = [
-        'profit_price', 'declare_value', 'data_base_price',
-        'logistics_fob', 'logistics_weight', 'logistics_length', 'logistics_width', 
-        'logistics_height', 'logistics_insurance', 'logistics_logistics',
-        'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
-        'logistics_saving', 'logistics_total'
-    ]
-    
-    for col in currency_with_decimals_columns:
-        if col in df.columns:
-            df[col] = df[col].apply(format_currency_with_decimals)
+    st.info("🔧 Aplicando formatos básicos para base de datos...")
     
     # C) Corregir encoding en columnas de texto
     text_columns = [
@@ -295,8 +272,43 @@ def apply_data_formatting(df):
         if col in df.columns:
             df[col] = df[col].apply(format_date_standard)
     
-    st.success("✅ Formatos aplicados correctamente")
+    st.success("✅ Formatos básicos aplicados")
     return df
+
+# NUEVA FUNCIÓN: Aplicar formatos monetarios solo para descarga CSV
+def apply_display_formatting(df):
+    """Aplica formatos de visualización (currency) solo para descarga CSV"""
+    
+    st.info("🎨 Aplicando formatos de visualización para descarga...")
+    
+    # Crear copia para no afectar el DataFrame original
+    display_df = df.copy()
+    
+    # A) Formato Currency sin decimales: $#,##0
+    currency_no_decimals_columns = [
+        'unit_price', 'meli_fee', 'iva', 'ica', 'fuente', 
+        'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount'
+    ]
+    
+    for col in currency_no_decimals_columns:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(format_currency_no_decimals)
+    
+    # B) Formato Currency con decimales: $#,##0.00
+    currency_with_decimals_columns = [
+        'profit_price', 'declare_value', 'data_base_price',
+        'logistics_fob', 'logistics_weight', 'logistics_length', 'logistics_width', 
+        'logistics_height', 'logistics_insurance', 'logistics_logistics',
+        'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
+        'logistics_saving', 'logistics_total'
+    ]
+    
+    for col in currency_with_decimals_columns:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(format_currency_with_decimals)
+    
+    st.success("✅ Formatos de visualización aplicados")
+    return display_df
 
 # Función principal para procesar archivos según las reglas especificadas
 def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_df=None, cxp_df=None):
@@ -525,8 +537,8 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         
         st.success(f"✅ CXP procesado: {matched_cxp} matches por Asignacion")
     
-    # PASO 6: Aplicar formatos y validaciones
-    consolidated_df = apply_data_formatting(consolidated_df)
+    # PASO 6: Aplicar solo formatos básicos (sin currency para BD)
+    consolidated_df = apply_basic_formatting(consolidated_df)
     
     # PASO 7: Validación de duplicados por order_id
     st.info("🔍 Validando duplicados por order_id...")
@@ -867,11 +879,14 @@ def main():
                         st.error("❌ Error guardando en la base de datos")
                         st.warning("Los datos fueron procesados correctamente pero no se pudieron guardar")
                 
-                # Opción de descarga
+                # Opción de descarga con formatos de visualización
                 st.header("💾 Descargar Resultado")
                 
+                # Aplicar formatos de visualización solo para descarga
+                display_df = apply_display_formatting(consolidated_df)
+                
                 csv_buffer = io.StringIO()
-                consolidated_df.to_csv(csv_buffer, index=False)
+                display_df.to_csv(csv_buffer, index=False)
                 csv_data = csv_buffer.getvalue()
                 
                 st.download_button(
