@@ -11,7 +11,7 @@ if st.button(button_text, disabled=not drapify_file, type="primary"):
                 drapify_df = pd.read_excel(drapify_file)
             else:
                 st.error("❌ No se encontró archivo Drapify")
-                return
+                st.stop() # CORRECTED LINE: Use st.stop() to halt Streamlit execution
 
             st.success(f"✅ Drapify cargado: {len(drapify_df)} registros")
 
