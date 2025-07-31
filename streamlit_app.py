@@ -448,7 +448,7 @@ def mostrar_consolidador():
                 except Exception as e:
                     st.warning("No se pudo verificar el total en BD")
                 
-                st.rerun()  # Refrescar para mostrar los datos
+                # NO hacer st.rerun() aquí - mantener la información visible
                 
             except Exception as e:
                 st.error(f"❌ Error procesando archivos: {str(e)}")
