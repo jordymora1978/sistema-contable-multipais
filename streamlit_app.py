@@ -493,10 +493,7 @@ def main():
     with st.sidebar:
         st.header("⚙️ Configuración")
         
-        processing_mode = st.radio(
-            "Modo de procesamiento:",
-            ["Solo consolidar", "Consolidar e insertar en DB"]
-        )
+        st.info("💾 Los datos se guardarán automáticamente en la base de datos")
         
         st.markdown("---")
         st.markdown("**📋 Orden de procesamiento:**")
@@ -509,6 +506,7 @@ def main():
         st.markdown("4. 🏷️ **Calcular Asignacion**")
         st.markdown("5. 💰 **CXP** (opcional)")
         st.markdown("   - Match: Asignacion → Ref #")
+        st.markdown("6. 💾 **Guardar en Base de Datos**")
     
     # Área principal
     col1, col2 = st.columns([2, 1])
@@ -565,9 +563,9 @@ def main():
             st.warning("⚠️ Archivo Drapify requerido")
     
     # Botón de procesamiento
-    if st.button("🚀 Procesar Archivos", disabled=not drapify_file, type="primary"):
+    if st.button("🚀 Procesar y Guardar en BD", disabled=not drapify_file, type="primary"):
         
-        with st.spinner("Procesando archivos según reglas de negocio..."):
+        with st.spinner("Procesando archivos y guardando en base de datos..."):
             try:
                 # Leer archivo Drapify
                 if drapify_file.name.endswith('.csv'):
@@ -651,6 +649,24 @@ def main():
                     asignacion_counts = consolidated_df['Asignacion'].value_counts().head(10)
                     st.bar_chart(asignacion_counts)
                 
+                # Guardar automáticamente en base de datos
+                st.header("💾 Guardando en Base de Datos")
+                
+                with st.spinner("Insertando datos en Supabase..."):
+                    inserted_count = insert_to_supabase(consolidated_df)
+                    
+                    if inserted_count > 0:
+                        st.success(f"🎉 ¡Procesamiento completado exitosamente!")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.success(f"✅ {len(consolidated_df)} registros procesados")
+                        with col2:
+                            st.success(f"✅ {inserted_count} registros guardados en BD")
+                        st.balloons()
+                    else:
+                        st.error("❌ Error guardando en la base de datos")
+                        st.warning("Los datos fueron procesados correctamente pero no se pudieron guardar")
+                
                 # Opción de descarga
                 st.header("💾 Descargar Resultado")
                 
@@ -663,22 +679,8 @@ def main():
                     data=csv_data,
                     file_name=f"consolidated_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
-                    type="primary"
+                    type="secondary"
                 )
-                
-                # Insertar en base de datos si se seleccionó
-                if processing_mode == "Consolidar e insertar en DB":
-                    st.header("💾 Insertar en Base de Datos")
-                    
-                    if st.button("🚀 Insertar en Supabase", type="secondary"):
-                        with st.spinner("Insertando datos en Supabase..."):
-                            inserted_count = insert_to_supabase(consolidated_df)
-                            
-                            if inserted_count > 0:
-                                st.success(f"✅ {inserted_count} registros insertados exitosamente!")
-                                st.balloons()
-                            else:
-                                st.error("❌ Error insertando datos")
                 
             except Exception as e:
                 st.error(f"❌ Error procesando archivos: {str(e)}")
