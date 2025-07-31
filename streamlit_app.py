@@ -59,8 +59,8 @@ def fix_accents(text):
         'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ã³': 'ó', 'Ãº': 'ú',
         # Vocales con tilde mayúsculas  
         'Ã': 'Á', 'Ã‰': 'É', 'Ã': 'Í', 'Ã"': 'Ó', 'Ãš': 'Ú',
-        # Ñ y ñ
-        'Ã±': 'ñ', 'Ã'': 'Ñ',
+        # Ñ y ñ (usando comillas dobles para evitar conflictos)
+        "Ã±": "ñ", "Ã'": "Ñ",
         # Ü y ü
         'Ã¼': 'ü', 'Ãœ': 'Ü',
         # Otros caracteres especiales
@@ -70,14 +70,14 @@ def fix_accents(text):
         'Ã„': 'Ä', 'Ã‹': 'Ë', 'Ã': 'Ï', 'Ã–': 'Ö',
         # Acentos graves
         'Ã ': 'à', 'Ã¨': 'è', 'Ã¬': 'ì', 'Ã²': 'ò', 'Ã¹': 'ù',
-        'Ã€': 'À', 'Ãˆ': 'È', 'ÃŒ': 'Ì', 'Ã'': 'Ò', 'Ã™': 'Ù',
+        'Ã€': 'À', 'Ãˆ': 'È', 'ÃŒ': 'Ì', "Ã'": 'Ò', 'Ã™': 'Ù',
         # Acentos circunflejos
         'Ã¢': 'â', 'Ãª': 'ê', 'Ã®': 'î', 'Ã´': 'ô', 'Ã»': 'û',
-        'Ã‚': 'Â', 'ÃŠ': 'Ê', 'ÃŽ': 'Î', 'Ã"': 'Ô', 'Ã›': 'Û',
+        'Ã‚': 'Â', 'ÃŠ': 'Ê', 'ÃŽ': 'Î', "Ã"": 'Ô', 'Ã›': 'Û',
         # Caracteres especiales adicionales
-        'Ã¿': 'ÿ', 'Ã': 'Ÿ',
+        'Ã¿': 'ÿ', "Ã": 'Ÿ',
         # Patrones específicos comunes en nombres y lugares
-        'Ã±ez': 'ñez', 'Ã±o': 'ño', 'Ã±a': 'ña',
+        "Ã±ez": "ñez", "Ã±o": "ño", "Ã±a": "ña",
         'Ã¡n': 'án', 'Ã©z': 'éz', 'Ã­a': 'ía',
         'Ã³n': 'ón', 'Ãºl': 'úl',
         # Patrones para lugares comunes
