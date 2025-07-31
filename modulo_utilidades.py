@@ -405,8 +405,10 @@ class CalculadorUtilidades:
 @st.cache_resource
 def get_calculador_utilidades():
     """Factory function para obtener instancia del calculador con cache"""
-    supabase_url = st.secrets["SUPABASE_URL"]
-    supabase_key = st.secrets["SUPABASE_ANON_KEY"]
+    # USAR CREDENCIALES DIRECTAS (igual que en streamlit_app.py)
+    supabase_url = "https://qzexuqkedukcwcyhrpza.supabase.co"
+    supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6ZXh1cWtlZHVrY3djeWhycHphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3NDEzODcsImV4cCI6MjA2OTMxNzM4N30.T_lXTVGZCFGA5rjVWQNo3WphIE2YPaifxonHIGPMkI0"
+    
     supabase = create_client(supabase_url, supabase_key)
     
     return CalculadorUtilidades(supabase)
