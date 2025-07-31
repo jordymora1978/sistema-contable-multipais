@@ -45,79 +45,22 @@ def fix_accents(text):
         return text
     
     try:
-        # Primero intentar decodificar como si fuera latin-1 y recodificar como UTF-8
-        # Esto soluciona la mayoría de problemas de encoding
+        # Método principal: decodificar como latin-1 y recodificar como UTF-8
+        # Esto soluciona automáticamente la mayoría de problemas de encoding
         result = text.encode('latin-1').decode('utf-8')
         return result
     except (UnicodeDecodeError, UnicodeEncodeError):
-        pass
-    
-    # Si el método anterior falla, usar mapeo manual de patrones comunes
-    # Mapeo completo de caracteres mal codificados en UTF-8
-    replacements = {
-        # Vocales con tilde minúsculas
-        'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ã³': 'ó', 'Ãº': 'ú',
-        # Vocales con tilde mayúsculas  
-        'Ã': 'Á', 'Ã‰': 'É', 'Ã': 'Í', 'Ã"': 'Ó', 'Ãš': 'Ú',
-        # Ñ y ñ (usando comillas dobles para evitar conflictos)
-        "Ã±": "ñ", "Ã'": "Ñ",
-        # Ü y ü
-        'Ã¼': 'ü', 'Ãœ': 'Ü',
-        # Otros caracteres especiales
-        'Ã§': 'ç', 'Ã‡': 'Ç',
-        # Diéresis
-        'Ã¤': 'ä', 'Ã«': 'ë', 'Ã¯': 'ï', 'Ã¶': 'ö',
-        'Ã„': 'Ä', 'Ã‹': 'Ë', 'Ã': 'Ï', 'Ã–': 'Ö',
-        # Acentos graves
-        'Ã ': 'à', 'Ã¨': 'è', 'Ã¬': 'ì', 'Ã²': 'ò', 'Ã¹': 'ù',
-        'Ã€': 'À', 'Ãˆ': 'È', 'ÃŒ': 'Ì', "Ã'": 'Ò', 'Ã™': 'Ù',
-        # Acentos circunflejos
-        'Ã¢': 'â', 'Ãª': 'ê', 'Ã®': 'î', 'Ã´': 'ô', 'Ã»': 'û',
-        'Ã‚': 'Â', 'ÃŠ': 'Ê', 'ÃŽ': 'Î', "Ã"": 'Ô', 'Ã›': 'Û',
-        # Caracteres especiales adicionales
-        'Ã¿': 'ÿ', "Ã": 'Ÿ',
-        # Patrones específicos comunes en nombres y lugares
-        "Ã±ez": "ñez", "Ã±o": "ño", "Ã±a": "ña",
-        'Ã¡n': 'án', 'Ã©z': 'éz', 'Ã­a': 'ía',
-        'Ã³n': 'ón', 'Ãºl': 'úl',
-        # Patrones para lugares comunes
-        'BogotÃ¡': 'Bogotá', 'MedellÃ­n': 'Medellín', 'CÃ³rdoba': 'Córdoba',
-        'PanamÃ¡': 'Panamá', 'TucumÃ¡n': 'Tucumán', 'CÃ¡diz': 'Cádiz',
-        'MÃ©xico': 'México', 'LeÃ³n': 'León', 'MÃ¡laga': 'Málaga',
-        # Patrones para apellidos comunes
-        'MartÃ­nez': 'Martínez', 'RodrÃ­guez': 'Rodríguez', 'GonzÃ¡lez': 'González',
-        'HernÃ¡ndez': 'Hernández', 'LÃ³pez': 'López', 'GarcÃ­a': 'García',
-        'PÃ©rez': 'Pérez', 'SÃ¡nchez': 'Sánchez', 'RamÃ­rez': 'Ramírez',
-        'FlÃ³rez': 'Flórez', 'VÃ¡squez': 'Vásquez', 'JimÃ©nez': 'Jiménez',
-        # Patrones para nombres comunes
-        'MarÃ­a': 'María', 'JosÃ©': 'José', 'AndrÃ©s': 'Andrés',
-        'MÃ³nica': 'Mónica', 'FabiÃ¡n': 'Fabián', 'AdriÃ¡n': 'Adrián',
-        'SebastiÃ¡n': 'Sebastián', 'NicolÃ¡s': 'Nicolás', 'VictorÃ­a': 'Victoria',
-    }
-    
-    result = str(text)
-    
-    # Aplicar todos los reemplazos
-    for wrong, correct in replacements.items():
-        result = result.replace(wrong, correct)
-    
-    # Patrón adicional: buscar secuencias Ã seguidas de caracteres especiales
-    import re
-    
-    # Patrón para detectar caracteres mal codificados que empiecen con Ã
-    pattern = r'Ã[^\w\s]'
-    matches = re.findall(pattern, result)
-    
-    # Si encontramos patrones sospechosos, intentar otra vez la conversión
-    if matches:
-        try:
-            # Intentar convertir byte por byte
-            result_bytes = result.encode('latin1', errors='ignore')
-            result = result_bytes.decode('utf-8', errors='ignore')
-        except:
-            pass
-    
-    return result
+        # Si falla el método automático, usar algunos reemplazos básicos muy comunes
+        replacements = {
+            'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ã³': 'ó', 'Ãº': 'ú',
+            'Ã±': 'ñ', 'Ã': 'Á', 'Ã‰': 'É', 'Ã"': 'Ó', 'Ãš': 'Ú'
+        }
+        
+        result = str(text)
+        for wrong, correct in replacements.items():
+            result = result.replace(wrong, correct)
+        
+        return result
 
 # Función para formatear fechas
 def format_date_to_standard(date_value, input_format='auto'):
