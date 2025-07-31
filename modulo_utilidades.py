@@ -629,7 +629,7 @@ def mostrar_consolidador(processing_mode):
                 st.exception(e)
 
 def mostrar_calculo_utilidades():
-    """Página principal de cálculo de utilidades"""
+    """Página de cálculo de utilidades"""
     st.title("💰 Cálculo de Utilidades")
     st.markdown("### Procesamiento automático según reglas de negocio")
     
@@ -638,205 +638,154 @@ def mostrar_calculo_utilidades():
         st.info("🚧 Esta funcionalidad estará disponible próximamente")
         return
     
-    # Obtener calculador
     try:
         calculador = get_calculador_utilidades()
-    except Exception as e:
-        st.error(f"❌ Error inicializando calculador: {str(e)}")
-        return
-    
-    # Tabs para organizar funcionalidad
-    tab1, tab2, tab3 = st.tabs(["🔄 Calcular", "📊 Resultados", "⚙️ Configuración"])
-    
-    with tab1:
-        st.subheader("🔄 Calcular Utilidades desde Órdenes Consolidadas")
+        st.success("✅ Módulo de utilidades cargado")
         
-        # Opciones de filtrado
+        # Mostrar TRM actual
+        st.subheader("💱 TRM Actual en el Sistema")
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            cuenta_filtro = st.selectbox(
-                "Filtrar por cuenta:",
-                ["Todas", "1-TODOENCARGO-CO", "2-MEGATIENDA SPA", "3-VEENDELO", 
-                 "4-MEGA TIENDAS PERUANAS", "5-DETODOPARATODOS", "6-COMPRAFACIL", 
-                 "7-COMPRA-YA", "8-FABORCARGO"]
-            )
-        
+            st.metric("🇨🇴 Colombia", f"${calculador.trm_actual.get('colombia', 0):,.2f}")
         with col2:
-            limite_registros = st.number_input(
-                "Límite de registros:", 
-                min_value=10, 
-                max_value=10000, 
-                value=100,
-                step=50
-            )
-        
+            st.metric("🇵🇪 Perú", f"${calculador.trm_actual.get('peru', 0):,.2f}")
         with col3:
-            solo_sin_utilidades = st.checkbox(
-                "Solo órdenes nuevas",
-                value=True,
-                help="Procesar solo órdenes que no tienen utilidades calculadas"
-            )
+            st.metric("🇨🇱 Chile", f"${calculador.trm_actual.get('chile', 0):,.2f}")
         
-        if st.button("🚀 Calcular Utilidades", type="primary", use_container_width=True):
-            with st.spinner("🔄 Obteniendo órdenes consolidadas..."):
-                try:
-                    # Construir query
-                    query = supabase.table('orders').select('*').limit(limite_registros)
-                    
-                    if cuenta_filtro != "Todas":
-                        query = query.eq('account_name', cuenta_filtro)
-                    
-                    # Obtener datos
-                    result = query.execute()
-                    
-                    if result.data:
-                        df_ordenes = pd.DataFrame(result.data)
-                        st.success(f"✅ {len(df_ordenes)} órdenes obtenidas")
-                        
-                        # Mostrar preview
-                        with st.expander("👀 Preview de datos"):
-                            st.dataframe(df_ordenes.head(), use_container_width=True)
-                        
-                        # Verificar columnas necesarias
-                        columnas_necesarias = ['serial_number', 'order_id', 'account_name', 'declare_value', 'quantity', 'net_real_amount']
-                        columnas_faltantes = [col for col in columnas_necesarias if col not in df_ordenes.columns]
-                        
-                        if columnas_faltantes:
-                            st.error(f"❌ Faltan columnas necesarias: {columnas_faltantes}")
-                            st.info("💡 Asegúrate de haber consolidado datos correctamente")
-                            return
-                        
-                        # Calcular utilidades
-                        st.info("🔄 Calculando utilidades...")
-                        
-                        # Adaptar nombres de columnas para el calculador
-                        df_adapted = df_ordenes.copy()
-                        if 'serial_number' in df_adapted.columns:
-                            df_adapted['Serial#'] = df_adapted['serial_number']
-                        if 'declare_value' in df_adapted.columns:
-                            df_adapted['Declare Value'] = df_adapted['declare_value']
-                        
-                        df_utilidades = calculador.calcular_utilidades_por_cuenta(df_adapted)
-                        
-                        # Mostrar resultados
-                        st.success("✅ Utilidades calculadas exitosamente!")
-                        
-                        # Métricas
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        with col1:
-                            total_utilidad = df_utilidades['Utilidad Gss'].sum()
-                            st.metric("💰 Utilidad Total", f"${total_utilidad:,.2f}")
-                        
-                        with col2:
-                            ordenes_positivas = (df_utilidades['Utilidad Gss'] > 0).sum()
-                            st.metric("📈 Órdenes Positivas", ordenes_positivas)
-                        
-                        with col3:
-                            ordenes_negativas = (df_utilidades['Utilidad Gss'] < 0).sum()
-                            st.metric("📉 Órdenes Negativas", ordenes_negativas)
-                        
-                        with col4:
-                            utilidad_promedio = df_utilidades['Utilidad Gss'].mean()
-                            st.metric("📊 Utilidad Promedio", f"${utilidad_promedio:.2f}")
-                        
-                        # Tabla de resultados
-                        st.subheader("📋 Resultados Detallados")
-                        st.dataframe(df_utilidades, use_container_width=True)
-                        
-                        # Gráfico por cuenta
-                        if len(df_utilidades['account_name'].unique()) > 1:
-                            st.subheader("📊 Utilidades por Cuenta")
-                            utilidad_por_cuenta = df_utilidades.groupby('account_name')['Utilidad Gss'].sum().reset_index()
-                            
-                            if UTILIDADES_AVAILABLE and 'px' in globals():
-                                fig = px.bar(utilidad_por_cuenta, x='account_name', y='Utilidad Gss',
-                                           title="Utilidad Total por Cuenta")
-                                st.plotly_chart(fig, use_container_width=True)
-                            else:
-                                st.bar_chart(utilidad_por_cuenta.set_index('account_name'))
-                        
-                        # Opciones de guardado y descarga
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if st.button("💾 Guardar en Base de Datos", use_container_width=True):
-                                if calculador.guardar_utilidades_en_bd(df_utilidades):
-                                    st.success("✅ Utilidades guardadas en base de datos!")
-                                    st.balloons()
-                                    time.sleep(2)
-                                    st.rerun()
-                        
-                        with col2:
-                            csv = df_utilidades.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Descargar CSV",
-                                data=csv,
-                                file_name=f"utilidades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                mime="text/csv",
-                                use_container_width=True
-                            )
-                    
-                    else:
-                        st.warning("⚠️ No se encontraron órdenes con los filtros especificados")
-                        st.info("💡 Primero consolida algunos archivos en 'Consolidador de Archivos'")
-                
-                except Exception as e:
-                    st.error(f"❌ Error obteniendo órdenes: {str(e)}")
-                    st.exception(e)
-    
-    with tab2:
-        st.subheader("📊 Resultados Guardados")
+        st.info("💡 Para cambiar TRM, ve a la página 'Gestión TRM'")
         
-        try:
-            # Obtener estadísticas desde la vista
-            result = supabase.table('estadisticas_utilidades').select('*').execute()
-            
-            if result.data:
-                stats_df = pd.DataFrame(result.data)
-                st.dataframe(stats_df, use_container_width=True)
-                
-                # Gráfico de estadísticas
-                if UTILIDADES_AVAILABLE and 'px' in globals():
-                    fig = px.bar(stats_df, x='account_name', y='utilidad_total_gss',
-                               title="Utilidad Total por Cuenta (Guardadas)")
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.bar_chart(stats_df.set_index('account_name')['utilidad_total_gss'])
-            else:
-                st.info("📝 No hay utilidades calculadas guardadas aún")
-        
-        except Exception as e:
-            st.error(f"❌ Error cargando estadísticas: {str(e)}")
-    
-    with tab3:
-        st.subheader("⚙️ Configuración del Sistema")
-        
-        # Mostrar TRM actual
-        st.markdown("**💱 TRM Actual:**")
-        for pais, valor in calculador.trm_actual.items():
-            st.write(f"🇺🇸 {pais.title()}: ${valor:,.4f}")
-        
-        st.info("💡 Para cambiar TRM, usar la página 'Gestión TRM'")
+    except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
 
 def mostrar_gestion_trm():
-    """Página de gestión TRM"""
+    """Página de gestión de TRM - CONFIGURACIÓN MANUAL"""
     st.title("💱 Gestión de TRM")
+    st.markdown("### Control Manual de Tasas Representativas del Mercado")
     
     if not UTILIDADES_AVAILABLE:
         st.warning("⚠️ Módulo de utilidades no disponible")
         st.info("🚧 Esta funcionalidad estará disponible próximamente")
         return
+    
+    try:
+        calculador = get_calculador_utilidades()
+        
+        st.info("💡 **Importante:** Cambiar la TRM afecta TODOS los cálculos futuros de utilidades. Los cambios se aplican inmediatamente.")
+        
+        # CONFIGURACIÓN MANUAL DE TRM
+        st.subheader("⚙️ Configurar TRM Manualmente")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**🇨🇴 COLOMBIA**")
+            nueva_trm_colombia = st.number_input(
+                "TRM Colombia (COP/USD):",
+                value=float(calculador.trm_actual.get('colombia', 4250.0)),
+                min_value=1000.0,
+                max_value=10000.0,
+                step=0.01,
+                format="%.2f",
+                key="trm_colombia"
+            )
+            st.caption(f"Actual: ${calculador.trm_actual.get('colombia', 0):,.2f}")
+        
+        with col2:
+            st.markdown("**🇵🇪 PERÚ**")
+            nueva_trm_peru = st.number_input(
+                "TRM Perú (PEN/USD):",
+                value=float(calculador.trm_actual.get('peru', 3.75)),
+                min_value=1.0,
+                max_value=10.0,
+                step=0.01,
+                format="%.2f",
+                key="trm_peru"
+            )
+            st.caption(f"Actual: ${calculador.trm_actual.get('peru', 0):,.2f}")
+        
+        with col3:
+            st.markdown("**🇨🇱 CHILE**")
+            nueva_trm_chile = st.number_input(
+                "TRM Chile (CLP/USD):",
+                value=float(calculador.trm_actual.get('chile', 850.0)),
+                min_value=500.0,
+                max_value=1500.0,
+                step=0.01,
+                format="%.2f",
+                key="trm_chile"
+            )
+            st.caption(f"Actual: ${calculador.trm_actual.get('chile', 0):,.2f}")
+        
+        # BOTÓN PARA ACTUALIZAR
+        st.markdown("---")
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+        
+        with col_btn2:
+            if st.button("💾 ACTUALIZAR TRM", type="primary", use_container_width=True):
+                # Preparar nuevas TRM
+                nuevas_trm = {
+                    'colombia': nueva_trm_colombia,
+                    'peru': nueva_trm_peru,
+                    'chile': nueva_trm_chile
+                }
+                
+                with st.spinner("Actualizando TRM en la base de datos..."):
+                    if calculador.actualizar_trm(nuevas_trm, "usuario_manual"):
+                        st.success("✅ ¡TRM actualizada exitosamente!")
+                        st.balloons()
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error("❌ Error al actualizar TRM")
+        
+        # MOSTRAR CAMBIOS
+        st.subheader("📊 Cambios Propuestos")
+        cambios_df = pd.DataFrame({
+            'País': ['🇨🇴 Colombia', '🇵🇪 Perú', '🇨🇱 Chile'],
+            'TRM Actual': [
+                f"${calculador.trm_actual.get('colombia', 0):,.2f}",
+                f"${calculador.trm_actual.get('peru', 0):,.2f}",
+                f"${calculador.trm_actual.get('chile', 0):,.2f}"
+            ],
+            'TRM Nueva': [
+                f"${nueva_trm_colombia:,.2f}",
+                f"${nueva_trm_peru:,.2f}",
+                f"${nueva_trm_chile:,.2f}"
+            ],
+            'Cambio': [
+                f"{((nueva_trm_colombia - calculador.trm_actual.get('colombia', 0)) / calculador.trm_actual.get('colombia', 1)) * 100:+.2f}%",
+                f"{((nueva_trm_peru - calculador.trm_actual.get('peru', 0)) / calculador.trm_actual.get('peru', 1)) * 100:+.2f}%",
+                f"{((nueva_trm_chile - calculador.trm_actual.get('chile', 0)) / calculador.trm_actual.get('chile', 1)) * 100:+.2f}%"
+            ]
+        })
+        
+        st.dataframe(cambios_df, use_container_width=True, hide_index=True)
+        
+        # HISTORIAL
+        st.subheader("📋 Últimos Cambios")
+        try:
+            result = supabase.table('trm_history').select('*').order('fecha_cambio', desc=True).limit(5).execute()
+            
+            if result.data:
+                historial_df = pd.DataFrame(result.data)
+                historial_df['fecha_cambio'] = pd.to_datetime(historial_df['fecha_cambio']).dt.strftime('%Y-%m-%d %H:%M')
+                st.dataframe(historial_df[['fecha_cambio', 'pais', 'valor_anterior', 'valor_nuevo', 'cambio_porcentual', 'usuario']], use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay cambios registrados")
+        except Exception as e:
+            st.error(f"Error cargando historial: {str(e)}")
+            
+    except Exception as e:
+        st.error(f"❌ Error inicializando gestión TRM: {str(e)}")
 
 def mostrar_dashboard_utilidades():
     """Dashboard de utilidades"""
     st.title("📊 Dashboard de Utilidades")
+    st.markdown("### Panel de control y métricas")
     
-    if not UTILIDADES_AVAILABLE:
-        st.warning("⚠️ Módulo de utilidades no disponible")
-        st.info("🚧 Esta funcionalidad estará disponible próximamente")
-        return
+    st.info("📝 No hay datos de utilidades para mostrar")
+    st.markdown("💡 Primero calcula utilidades en la página 'Cálculo de Utilidades'")
 
 def mostrar_reportes():
     """Página de reportes"""
