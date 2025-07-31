@@ -133,24 +133,42 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     st.success(f"🎉 Consolidación completada: {len(consolidated_df)} registros")
     return consolidated_df
 
-def insert_to_supabase(df):
-    """Inserta datos en Supabase"""
+def insert_to_supabase_with_validation(df):
+    """Inserta datos en Supabase con validación de duplicados"""
     if not supabase:
         st.error("❌ No hay conexión a Supabase")
-        return 0
+        return {'inserted': 0, 'duplicates': 0, 'errors': 0}
         
     try:
-        records = df.to_dict('records')
+        # Obtener order_ids existentes en la BD
+        st.info("🔍 Verificando duplicados...")
+        existing_result = supabase.table('orders').select('order_id').execute()
+        existing_order_ids = set([row['order_id'] for row in existing_result.data if row.get('order_id')])
         
+        # Filtrar registros nuevos
+        df_to_insert = df[~df['order_id'].isin(existing_order_ids)].copy()
+        duplicates_count = len(df) - len(df_to_insert)
+        
+        if len(df_to_insert) == 0:
+            st.warning("⚠️ Todos los registros ya existen en la base de datos")
+            return {'inserted': 0, 'duplicates': duplicates_count, 'errors': 0}
+        
+        # Preparar registros para inserción
+        records = df_to_insert.to_dict('records')
+        
+        # Limpiar valores NaN
         for record in records:
             for key, value in record.items():
                 if pd.isna(value):
                     record[key] = None
         
+        # Insertar en lotes
         batch_size = 50
         total_inserted = 0
+        errors = 0
         
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
         for i in range(0, len(records), batch_size):
             batch = records[i:i + batch_size]
@@ -161,17 +179,21 @@ def insert_to_supabase(df):
                 
                 progress = min(1.0, (i + batch_size) / len(records))
                 progress_bar.progress(progress)
+                status_text.text(f"Insertando lote {i//batch_size + 1}... ({total_inserted}/{len(records)})")
                 
             except Exception as batch_error:
-                st.error(f"Error en lote: {str(batch_error)}")
+                st.error(f"Error en lote {i//batch_size + 1}: {str(batch_error)}")
+                errors += len(batch)
                 continue
         
         progress_bar.progress(1.0)
-        return total_inserted
+        status_text.empty()
+        
+        return {'inserted': total_inserted, 'duplicates': duplicates_count, 'errors': errors}
         
     except Exception as e:
-        st.error(f"Error general: {str(e)}")
-        return 0
+        st.error(f"Error general insertando: {str(e)}")
+        return {'inserted': 0, 'duplicates': 0, 'errors': len(df)}
 
 def verificar_conexion_supabase():
     if not supabase:
@@ -192,8 +214,8 @@ def clear_session_data():
     st.session_state.last_processing_time = None
 
 # PÁGINAS DE LA APLICACIÓN
-def mostrar_consolidador(processing_mode):
-    """Página del consolidador de archivos - MEJORADA CON PERSISTENCIA"""
+def mostrar_consolidador():
+    """Página del consolidador de archivos - CON INSERCIÓN AUTOMÁTICA"""
     
     # Mostrar estado de datos existentes si los hay
     if st.session_state.processing_complete and st.session_state.consolidated_data is not None:
@@ -378,19 +400,53 @@ def mostrar_consolidador(processing_mode):
                 
                 st.success("💾 Datos guardados en memoria (datos anteriores reemplazados)")
                 
-                # Insertar en BD si se seleccionó
-                if processing_mode == "Consolidar e insertar en DB":
-                    st.header("💾 Insertar en Base de Datos")
-                    
-                    if st.button("🚀 Insertar en Supabase", type="secondary"):
-                        with st.spinner("Insertando datos..."):
-                            inserted_count = insert_to_supabase(consolidated_df)
-                            
-                            if inserted_count > 0:
-                                st.success(f"✅ {inserted_count} registros insertados!")
-                                st.balloons()
-                            else:
-                                st.error("❌ Error insertando datos")
+                # INSERCIÓN AUTOMÁTICA EN BASE DE DATOS
+                st.header("💾 Insertando en Base de Datos")
+                
+                with st.spinner("Validando duplicados e insertando datos..."):
+                    result = insert_to_supabase_with_validation(consolidated_df)
+                
+                # Mostrar resultados detallados
+                st.subheader("📊 Resultado de la Inserción")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("📥 Nuevos Insertados", result['inserted'], 
+                             delta=f"+{result['inserted']}" if result['inserted'] > 0 else None)
+                
+                with col2:
+                    st.metric("⚠️ Duplicados", result['duplicates'],
+                             delta="Ya existían" if result['duplicates'] > 0 else None)
+                
+                with col3:
+                    st.metric("❌ Errores", result['errors'],
+                             delta="No insertados" if result['errors'] > 0 else None)
+                
+                with col4:
+                    total_procesados = result['inserted'] + result['duplicates'] + result['errors']
+                    st.metric("📋 Total Procesados", total_procesados)
+                
+                # Mensajes de resultado
+                if result['inserted'] > 0:
+                    st.success(f"✅ {result['inserted']} registros nuevos insertados correctamente")
+                
+                if result['duplicates'] > 0:
+                    st.warning(f"⚠️ {result['duplicates']} registros ya existían en la base de datos")
+                
+                if result['errors'] > 0:
+                    st.error(f"❌ {result['errors']} registros tuvieron errores al insertar")
+                
+                if result['inserted'] > 0:
+                    st.balloons()
+                
+                # Verificar total en BD
+                try:
+                    total_bd_result = supabase.table('orders').select('id', count='exact').execute()
+                    total_bd = total_bd_result.count
+                    st.info(f"📊 Total registros en base de datos: **{total_bd:,}**")
+                except Exception as e:
+                    st.warning("No se pudo verificar el total en BD")
                 
                 st.rerun()  # Refrescar para mostrar los datos
                 
@@ -771,7 +827,7 @@ def main():
         ])
         
         st.markdown("---")
-        processing_mode = st.radio("Modo:", ["Solo consolidar", "Consolidar e insertar en DB"])
+        st.info("🎯 Modo: Procesar e insertar automáticamente en BD")
         
         # Botón para limpiar toda la sesión
         if st.session_state.processing_complete or st.session_state.utilidades_calculated:
@@ -781,7 +837,7 @@ def main():
     
     # ROUTING
     if pagina == "🏠 Consolidador de Archivos":
-        mostrar_consolidador(processing_mode)
+        mostrar_consolidador()
     elif pagina == "💰 Cálculo de Utilidades":
         mostrar_calculo_utilidades()
     elif pagina == "💱 Gestión TRM":
