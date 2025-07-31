@@ -1,367 +1,412 @@
-# ===============================================
-# MODIFICACIONES PARA AGREGAR UTILIDADES
-# Agregar estas partes a tu streamlit_app.py existente
-# ===============================================
+"""
+Módulo de Cálculo de Utilidades
+Implementa todas las fórmulas del prompt según account_name
+"""
 
-# 1. AGREGAR IMPORT AL INICIO (después de tus imports existentes)
-from modulo_utilidades import get_calculador_utilidades
-import plotly.express as px
-import plotly.graph_objects as go
+import streamlit as st
+import pandas as pd
+import numpy as np
+from supabase import create_client, Client
+from datetime import datetime
+import math
+from typing import Dict, List, Optional, Tuple
 
-# 2. MODIFICAR EL SIDEBAR (reemplazar tu sidebar actual)
-def main():
-    # ... tu código existente ...
+class CalculadorUtilidades:
+    """Clase principal para cálculo de utilidades según reglas de negocio"""
     
-    # SIDEBAR MODIFICADO
-    with st.sidebar:
-        st.image("https://via.placeholder.com/150x50/4F46E5/white?text=LOGO", width=150)
-        st.markdown("---")
-        
-        # NAVEGACIÓN EXPANDIDA (agregar esta página)
-        pagina = st.selectbox(
-            "📋 Navegación",
-            [
-                "🏠 Consolidador de Archivos",  # Tu página actual
-                "💰 Cálculo de Utilidades",    # NUEVA PÁGINA
-                "💱 Gestión TRM",              # NUEVA PÁGINA  
-                "📊 Dashboard Utilidades",     # NUEVA PÁGINA
-                "📋 Reportes"                  # NUEVA PÁGINA
-            ]
-        )
-        
-        st.markdown("---")
-        
-        # Estado del sistema
-        st.markdown("### 📊 Estado del Sistema")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("🟢 Online", "99.8%")
-        with col2:
-            st.metric("📈 Uptime", "24/7")
+    def __init__(self, supabase_client: Client):
+        self.supabase = supabase_client
+        self.trm_actual = {}
+        self.anexo_a = []
+        self._cargar_datos_base()
     
-    # 3. ROUTING DE PÁGINAS (agregar después de tu código actual)
-    if pagina == "🏠 Consolidador de Archivos":
-        # TU CÓDIGO ACTUAL DEL CONSOLIDADOR VA AQUÍ
-        mostrar_consolidador()  # Mover tu código actual a esta función
+    def _cargar_datos_base(self):
+        """Carga TRM actual y tabla ANEXO A desde base de datos"""
+        try:
+            # Cargar TRM actual
+            trm_result = self.supabase.table('trm_actual').select('*').execute()
+            for trm in trm_result.data:
+                self.trm_actual[trm['pais']] = float(trm['valor'])
+            
+            # Cargar ANEXO A
+            anexo_result = self.supabase.table('anexo_a_pesos').select('*').eq('activo', True).execute()
+            self.anexo_a = anexo_result.data
+            
+            st.success(f"✅ TRM cargadas: {list(self.trm_actual.keys())}")
+            st.success(f"✅ ANEXO A cargado: {len(self.anexo_a)} rangos de peso")
+            
+        except Exception as e:
+            st.error(f"❌ Error cargando datos base: {str(e)}")
+            # Valores por defecto si falla la carga
+            self.trm_actual = {'colombia': 4250.0, 'peru': 3.75, 'chile': 850.0}
+            self.anexo_a = []
     
-    elif pagina == "💰 Cálculo de Utilidades":
-        mostrar_calculo_utilidades()
-    
-    elif pagina == "💱 Gestión TRM":
-        mostrar_gestion_trm()
-    
-    elif pagina == "📊 Dashboard Utilidades":
-        mostrar_dashboard_utilidades()
-    
-    elif pagina == "📋 Reportes":
-        mostrar_reportes()
-
-# 4. FUNCIÓN CONSOLIDADOR (mover tu código actual aquí)
-def mostrar_consolidador():
-    """Tu código actual del consolidador va aquí completo"""
-    # COPIAR AQUÍ TODO TU CÓDIGO ACTUAL desde st.title hasta el final
-    # (todo lo que está después del sidebar)
-    st.title("📦 Consolidador de Órdenes")
-    # ... resto de tu código actual ...
-
-# 5. NUEVAS FUNCIONES PARA UTILIDADES
-def mostrar_calculo_utilidades():
-    """Página principal de cálculo de utilidades"""
-    st.title("💰 Cálculo de Utilidades")
-    st.markdown("### Procesamiento automático según reglas de negocio")
-    
-    # Obtener calculador
-    calculador = get_calculador_utilidades()
-    
-    # Tabs para organizar funcionalidad
-    tab1, tab2, tab3 = st.tabs(["🔄 Calcular", "📊 Resultados", "⚙️ Configuración"])
-    
-    with tab1:
-        st.subheader("🔄 Calcular Utilidades desde Órdenes Consolidadas")
-        
-        # Opciones de filtrado
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            cuenta_filtro = st.selectbox(
-                "Filtrar por cuenta:",
-                ["Todas", "1-TODOENCARGO-CO", "2-MEGATIENDA SPA", "3-VEENDELO", 
-                 "4-MEGA TIENDAS PERUANAS", "5-DETODOPARATODOS", "6-COMPRAFACIL", 
-                 "7-COMPRA-YA", "8-FABORCARGO"]
-            )
-        
-        with col2:
-            limite_registros = st.number_input(
-                "Límite de registros:", 
-                min_value=10, 
-                max_value=10000, 
-                value=1000,
-                step=50
-            )
-        
-        with col3:
-            solo_sin_utilidades = st.checkbox(
-                "Solo órdenes sin utilidades calculadas",
-                value=True,
-                help="Procesar solo órdenes que no tienen utilidades calculadas"
-            )
-        
-        if st.button("🚀 Calcular Utilidades", type="primary", use_container_width=True):
-            with st.spinner("🔄 Obteniendo órdenes consolidadas..."):
-                try:
-                    # Construir query
-                    query = supabase.table('orders').select('*').limit(limite_registros)
+    def actualizar_trm(self, nuevas_trm: Dict[str, float], usuario: str = "sistema") -> bool:
+        """Actualiza las TRM en base de datos y recalcula si es necesario"""
+        try:
+            cambios_significativos = []
+            
+            for pais, nuevo_valor in nuevas_trm.items():
+                if pais in self.trm_actual:
+                    valor_anterior = self.trm_actual[pais]
+                    cambio_porcentual = ((nuevo_valor - valor_anterior) / valor_anterior) * 100
                     
-                    if cuenta_filtro != "Todas":
-                        query = query.eq('account_name', cuenta_filtro)
+                    # Actualizar en base de datos
+                    self.supabase.table('trm_actual').update({
+                        'valor': nuevo_valor,
+                        'valor_anterior': valor_anterior,
+                        'fecha_actualizacion': datetime.now().isoformat(),
+                        'usuario_actualizacion': usuario
+                    }).eq('pais', pais).execute()
                     
-                    # Obtener datos
-                    result = query.execute()
+                    # Registrar en historial
+                    self.supabase.table('trm_history').insert({
+                        'pais': pais,
+                        'valor_anterior': valor_anterior,
+                        'valor_nuevo': nuevo_valor,
+                        'cambio_porcentual': round(cambio_porcentual, 2),
+                        'usuario': usuario,
+                        'motivo': 'Actualización manual'
+                    }).execute()
                     
-                    if result.data:
-                        df_ordenes = pd.DataFrame(result.data)
-                        st.success(f"✅ {len(df_ordenes)} órdenes obtenidas")
-                        
-                        # Mostrar preview
-                        with st.expander("👀 Preview de datos"):
-                            st.dataframe(df_ordenes.head(), use_container_width=True)
-                        
-                        # Calcular utilidades
-                        st.info("🔄 Calculando utilidades...")
-                        df_utilidades = calculador.calcular_utilidades_por_cuenta(df_ordenes)
-                        
-                        # Mostrar resultados
-                        st.success("✅ Utilidades calculadas exitosamente!")
-                        
-                        # Métricas
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        with col1:
-                            total_utilidad = df_utilidades['Utilidad Gss'].sum()
-                            st.metric("💰 Utilidad Total", f"${total_utilidad:,.2f}")
-                        
-                        with col2:
-                            ordenes_positivas = (df_utilidades['Utilidad Gss'] > 0).sum()
-                            st.metric("📈 Órdenes Positivas", ordenes_positivas)
-                        
-                        with col3:
-                            ordenes_negativas = (df_utilidades['Utilidad Gss'] < 0).sum()
-                            st.metric("📉 Órdenes Negativas", ordenes_negativas)
-                        
-                        with col4:
-                            utilidad_promedio = df_utilidades['Utilidad Gss'].mean()
-                            st.metric("📊 Utilidad Promedio", f"${utilidad_promedio:.2f}")
-                        
-                        # Tabla de resultados
-                        st.subheader("📋 Resultados Detallados")
-                        st.dataframe(df_utilidades, use_container_width=True)
-                        
-                        # Gráfico por cuenta
-                        if len(df_utilidades['account_name'].unique()) > 1:
-                            st.subheader("📊 Utilidades por Cuenta")
-                            utilidad_por_cuenta = df_utilidades.groupby('account_name')['Utilidad Gss'].sum().reset_index()
-                            fig = px.bar(utilidad_por_cuenta, x='account_name', y='Utilidad Gss',
-                                       title="Utilidad Total por Cuenta")
-                            st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Opciones de guardado y descarga
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if st.button("💾 Guardar en Base de Datos", use_container_width=True):
-                                if calculador.guardar_utilidades_en_bd(df_utilidades):
-                                    st.success("✅ Utilidades guardadas en base de datos!")
-                                    st.rerun()
-                        
-                        with col2:
-                            csv = df_utilidades.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Descargar CSV",
-                                data=csv,
-                                file_name=f"utilidades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                mime="text/csv",
-                                use_container_width=True
-                            )
+                    # Actualizar valor local
+                    self.trm_actual[pais] = nuevo_valor
                     
-                    else:
-                        st.warning("⚠️ No se encontraron órdenes con los filtros especificados")
-                
-                except Exception as e:
-                    st.error(f"❌ Error obteniendo órdenes: {str(e)}")
+                    # Verificar si requiere recálculo
+                    if abs(cambio_porcentual) > 1.0:  # Más del 1%
+                        cambios_significativos.append(pais)
+            
+            # Mostrar resultado
+            if cambios_significativos:
+                st.warning(f"⚠️ Cambios significativos en TRM: {cambios_significativos}")
+                st.info("💡 Se recomienda recalcular utilidades")
+            
+            return True
+            
+        except Exception as e:
+            st.error(f"❌ Error actualizando TRM: {str(e)}")
+            return False
     
-    with tab2:
-        st.subheader("📊 Resultados Guardados")
+    def buscar_gss_logistica(self, peso_kg: float) -> float:
+        """Busca el valor de Gss Logística según el peso en la tabla ANEXO A"""
+        for rango in self.anexo_a:
+            if rango['peso_desde'] <= peso_kg <= rango['peso_hasta']:
+                return float(rango['gss_logistica'])
+        return 0.0
+    
+    def redondear_escala_05(self, valor: float) -> float:
+        """Redondea a escala de 0.5 (1.2 -> 1.5, 1.8 -> 2.0)"""
+        return math.ceil(valor * 2) / 2
+    
+    def limpiar_valores_monetarios(self, value) -> float:
+        """Limpia valores monetarios formateados como strings"""
+        if pd.isna(value) or value is None:
+            return 0.0
+        
+        if isinstance(value, str):
+            # Remover símbolos de moneda y comas
+            clean_value = value.replace('$', '').replace(',', '').strip()
+            try:
+                return float(clean_value)
+            except ValueError:
+                return 0.0
         
         try:
-            # Obtener estadísticas
-            stats_df = calculador.obtener_estadisticas_cuenta()
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
+    
+    def calcular_utilidades_por_cuenta(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calcula utilidades según las reglas específicas de cada account_name
+        Implementa exactamente el prompt proporcionado
+        """
+        st.info("🔄 Iniciando cálculo de utilidades por cuenta...")
+        
+        # Preparar DataFrame resultado con columnas base
+        resultado_df = df[['Serial#', 'order_id', 'account_name', 'Asignacion']].copy()
+        
+        # Limpiar valores monetarios críticos
+        for col in ['Declare Value', 'net_real_amount', 'logistics_total', 'aditionals_total', 'cxp_amt_due']:
+            if col in df.columns:
+                df[col] = df[col].apply(self.limpiar_valores_monetarios)
+        
+        # Inicializar todas las columnas posibles
+        columnas_utilidad = [
+            'Costo Amazon', 'Total & Adicional', 'MELI USD', 'Utilidad Gss',
+            'Impuesto por facturación', 'Utilidad', 'Utilidad Socio',
+            'Bodegal', 'Socio_cuenta', 'logistic_weight_ks', 'Gss Logística', 'Impuesto Gss'
+        ]
+        
+        for col in columnas_utilidad:
+            resultado_df[col] = np.nan
+        
+        # Procesar cada fila según su account_name
+        for idx, row in df.iterrows():
+            account_name = row.get('account_name', '')
             
-            if not stats_df.empty:
-                st.dataframe(stats_df, use_container_width=True)
+            try:
+                if account_name == '1-TODOENCARGO-CO':
+                    self._calcular_todoencargo_co(resultado_df, idx, row)
                 
-                # Gráfico de estadísticas
-                fig = px.bar(stats_df, x='account_name', y='utilidad_total_gss',
-                           title="Utilidad Total por Cuenta (Guardadas)")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("📝 No hay utilidades calculadas guardadas aún")
+                elif account_name == '4-MEGA TIENDAS PERUANAS':
+                    self._calcular_mega_tiendas_peruanas(resultado_df, idx, row)
+                
+                elif account_name in ['5-DETODOPARATODOS', '6-COMPRAFACIL', '7-COMPRA-YA']:
+                    self._calcular_detodoparatodos_group(resultado_df, idx, row)
+                
+                elif account_name in ['2-MEGATIENDA SPA', '3-VEENDELO']:
+                    self._calcular_megatienda_spa_group(resultado_df, idx, row)
+                
+                elif account_name == '8-FABORCARGO':
+                    self._calcular_faborcargo(resultado_df, idx, row)
+                
+                else:
+                    # Account name no reconocido
+                    resultado_df.loc[idx, 'Utilidad Gss'] = 0
+                    st.warning(f"⚠️ Account name no reconocido: {account_name}")
+            
+            except Exception as e:
+                st.error(f"❌ Error procesando fila {idx} ({account_name}): {str(e)}")
+                continue
         
+        # Estadísticas del procesamiento
+        total_procesadas = len(resultado_df)
+        utilidades_calculadas = resultado_df['Utilidad Gss'].notna().sum()
+        utilidad_total = resultado_df['Utilidad Gss'].sum()
+        
+        st.success(f"✅ Procesamiento completado:")
+        st.write(f"📊 Total órdenes: {total_procesadas}")
+        st.write(f"🔢 Utilidades calculadas: {utilidades_calculadas}")
+        st.write(f"💰 Utilidad total: ${utilidad_total:,.2f}")
+        
+        return resultado_df
+    
+    def _calcular_todoencargo_co(self, resultado_df: pd.DataFrame, idx: int, row: pd.Series):
+        """Cálculo para 1-TODOENCARGO-CO"""
+        declare_value = self.limpiar_valores_monetarios(row.get('Declare Value', 0))
+        quantity = int(row.get('quantity', 1))
+        net_real_amount = self.limpiar_valores_monetarios(row.get('net_real_amount', 0))
+        logistics_total = self.limpiar_valores_monetarios(row.get('logistics_total', 0))
+        aditionals_total = self.limpiar_valores_monetarios(row.get('aditionals_total', 0))
+        
+        # Cálculos según el prompt
+        costo_amazon = declare_value * quantity
+        total_adicional = logistics_total + aditionals_total
+        meli_usd = net_real_amount / self.trm_actual.get('colombia', 4250.0)
+        utilidad_gss = meli_usd - costo_amazon - total_adicional
+        
+        # Asignar valores
+        resultado_df.loc[idx, 'Costo Amazon'] = costo_amazon
+        resultado_df.loc[idx, 'Total & Adicional'] = total_adicional
+        resultado_df.loc[idx, 'MELI USD'] = meli_usd
+        resultado_df.loc[idx, 'Utilidad Gss'] = utilidad_gss
+    
+    def _calcular_mega_tiendas_peruanas(self, resultado_df: pd.DataFrame, idx: int, row: pd.Series):
+        """Cálculo para 4-MEGA TIENDAS PERUANAS"""
+        declare_value = self.limpiar_valores_monetarios(row.get('Declare Value', 0))
+        quantity = int(row.get('quantity', 1))
+        net_real_amount = self.limpiar_valores_monetarios(row.get('net_real_amount', 0))
+        logistics_total = self.limpiar_valores_monetarios(row.get('logistics_total', 0))
+        aditionals_total = self.limpiar_valores_monetarios(row.get('aditionals_total', 0))
+        
+        # Cálculos según el prompt
+        costo_amazon = declare_value * quantity
+        total_adicional = logistics_total + aditionals_total
+        meli_usd = net_real_amount / self.trm_actual.get('peru', 3.75)
+        utilidad_gss = meli_usd - costo_amazon - total_adicional
+        
+        # Asignar valores
+        resultado_df.loc[idx, 'Costo Amazon'] = costo_amazon
+        resultado_df.loc[idx, 'Total & Adicional'] = total_adicional
+        resultado_df.loc[idx, 'MELI USD'] = meli_usd
+        resultado_df.loc[idx, 'Utilidad Gss'] = utilidad_gss
+    
+    def _calcular_detodoparatodos_group(self, resultado_df: pd.DataFrame, idx: int, row: pd.Series):
+        """Cálculo para 5-DETODOPARATODOS, 6-COMPRAFACIL, 7-COMPRA-YA"""
+        declare_value = self.limpiar_valores_monetarios(row.get('Declare Value', 0))
+        quantity = int(row.get('quantity', 1))
+        net_real_amount = self.limpiar_valores_monetarios(row.get('net_real_amount', 0))
+        logistics_total = self.limpiar_valores_monetarios(row.get('logistics_total', 0))
+        aditionals_total = self.limpiar_valores_monetarios(row.get('aditionals_total', 0))
+        order_status_meli = row.get('order_status_meli', '')
+        
+        # Cálculos según el prompt
+        costo_amazon = declare_value * quantity
+        total_adicional = logistics_total + aditionals_total
+        meli_usd = net_real_amount / self.trm_actual.get('colombia', 4250.0)
+        
+        # Impuesto por facturación
+        impuesto_facturacion = 1 if order_status_meli == 'approved' else 0
+        
+        # Utilidad base
+        utilidad = meli_usd - costo_amazon - total_adicional - impuesto_facturacion
+        
+        # Distribución de utilidades según regla 7.5
+        if utilidad >= 7.5:
+            utilidad_socio = 7.5
+            utilidad_gss = utilidad - 7.5
+        else:
+            utilidad_socio = utilidad
+            utilidad_gss = 0
+        
+        # Asignar valores
+        resultado_df.loc[idx, 'Costo Amazon'] = costo_amazon
+        resultado_df.loc[idx, 'Total & Adicional'] = total_adicional
+        resultado_df.loc[idx, 'MELI USD'] = meli_usd
+        resultado_df.loc[idx, 'Impuesto por facturación'] = impuesto_facturacion
+        resultado_df.loc[idx, 'Utilidad'] = utilidad
+        resultado_df.loc[idx, 'Utilidad Socio'] = utilidad_socio
+        resultado_df.loc[idx, 'Utilidad Gss'] = utilidad_gss
+    
+    def _calcular_megatienda_spa_group(self, resultado_df: pd.DataFrame, idx: int, row: pd.Series):
+        """Cálculo para 2-MEGATIENDA SPA, 3-VEENDELO"""
+        declare_value = self.limpiar_valores_monetarios(row.get('Declare Value', 0))
+        quantity = int(row.get('quantity', 1))
+        net_real_amount = self.limpiar_valores_monetarios(row.get('net_real_amount', 0))
+        logistic_type = row.get('logistic_type', '')
+        order_status_meli = row.get('order_status_meli', '')
+        cxp_amt_due = self.limpiar_valores_monetarios(row.get('cxp_amt_due', 0))
+        
+        # Cálculos según el prompt
+        costo_amazon = declare_value * quantity
+        
+        # Bodegal
+        bodegal = 3.5 if logistic_type == 'xd_drop_off' else 0
+        
+        # Socio_cuenta
+        socio_cuenta = 0 if order_status_meli == 'refunded' else 1
+        
+        # MELI USD
+        meli_usd = net_real_amount / self.trm_actual.get('chile', 850.0)
+        
+        # Utilidad Gss
+        utilidad_gss = meli_usd - cxp_amt_due - costo_amazon - bodegal - socio_cuenta
+        
+        # Asignar valores
+        resultado_df.loc[idx, 'Costo Amazon'] = costo_amazon
+        resultado_df.loc[idx, 'Bodegal'] = bodegal
+        resultado_df.loc[idx, 'Socio_cuenta'] = socio_cuenta
+        resultado_df.loc[idx, 'MELI USD'] = meli_usd
+        resultado_df.loc[idx, 'Utilidad Gss'] = utilidad_gss
+    
+    def _calcular_faborcargo(self, resultado_df: pd.DataFrame, idx: int, row: pd.Series):
+        """Cálculo para 8-FABORCARGO"""
+        logistic_weight_lbs = self.limpiar_valores_monetarios(row.get('logistic_weight_lbs', 0))
+        logistic_type = row.get('logistic_type', '')
+        cxp_arancel = self.limpiar_valores_monetarios(row.get('cxp_arancel', 0))
+        cxp_iva = self.limpiar_valores_monetarios(row.get('cxp_iva', 0))
+        cxp_amt_due = self.limpiar_valores_monetarios(row.get('cxp_amt_due', 0))
+        
+        # Conversión de peso
+        logistic_weight_ks = self.redondear_escala_05(logistic_weight_lbs / 2.20462)
+        
+        # Buscar Gss Logística en ANEXO A
+        gss_logistica = self.buscar_gss_logistica(logistic_weight_ks)
+        
+        # Bodegal
+        bodegal = 3.5 if logistic_type == 'xd_drop_off' else 0
+        
+        # Impuesto Gss
+        impuesto_gss = cxp_arancel + cxp_iva
+        
+        # Utilidad Gss
+        utilidad_gss = gss_logistica + impuesto_gss - cxp_amt_due
+        
+        # Asignar valores
+        resultado_df.loc[idx, 'logistic_weight_ks'] = logistic_weight_ks
+        resultado_df.loc[idx, 'Gss Logística'] = gss_logistica
+        resultado_df.loc[idx, 'Bodegal'] = bodegal
+        resultado_df.loc[idx, 'Impuesto Gss'] = impuesto_gss
+        resultado_df.loc[idx, 'Utilidad Gss'] = utilidad_gss
+    
+    def guardar_utilidades_en_bd(self, df_utilidades: pd.DataFrame, usuario: str = "sistema") -> bool:
+        """Guarda los resultados de utilidades en la base de datos"""
+        try:
+            st.info("💾 Guardando utilidades en base de datos...")
+            
+            # Preparar registros para inserción
+            registros = []
+            
+            for idx, row in df_utilidades.iterrows():
+                registro = {
+                    'serial_number': str(row.get('Serial#', '')),
+                    'order_id': str(row.get('order_id', '')),
+                    'account_name': str(row.get('account_name', '')),
+                    'asignacion': str(row.get('Asignacion', '')),
+                    'costo_amazon': float(row.get('Costo Amazon', 0)) if pd.notna(row.get('Costo Amazon')) else None,
+                    'meli_usd': float(row.get('MELI USD', 0)) if pd.notna(row.get('MELI USD')) else None,
+                    'utilidad_gss': float(row.get('Utilidad Gss', 0)) if pd.notna(row.get('Utilidad Gss')) else None,
+                    'utilidad_socio': float(row.get('Utilidad Socio', 0)) if pd.notna(row.get('Utilidad Socio')) else None,
+                    'total_adicional': float(row.get('Total & Adicional', 0)) if pd.notna(row.get('Total & Adicional')) else None,
+                    'trm_colombia': self.trm_actual.get('colombia'),
+                    'trm_peru': self.trm_actual.get('peru'),
+                    'trm_chile': self.trm_actual.get('chile'),
+                    'usuario_calculo': usuario,
+                    'fecha_calculo': datetime.now().isoformat()
+                }
+                
+                # Limpiar valores None
+                registro = {k: v for k, v in registro.items() if v is not None}
+                registros.append(registro)
+            
+            # Insertar en lotes
+            batch_size = 50
+            total_insertados = 0
+            
+            for i in range(0, len(registros), batch_size):
+                batch = registros[i:i + batch_size]
+                result = self.supabase.table('utilidades_calculadas').insert(batch).execute()
+                total_insertados += len(batch)
+                
+                # Mostrar progreso
+                progreso = min(100, (i + batch_size) / len(registros) * 100)
+                st.progress(progreso / 100)
+            
+            st.success(f"✅ {total_insertados} registros de utilidades guardados correctamente")
+            return True
+            
         except Exception as e:
-            st.error(f"❌ Error cargando estadísticas: {str(e)}")
+            st.error(f"❌ Error guardando utilidades: {str(e)}")
+            return False
     
-    with tab3:
-        st.subheader("⚙️ Configuración del Sistema")
-        
-        # Mostrar TRM actual
-        st.markdown("**💱 TRM Actual:**")
-        for pais, valor in calculador.trm_actual.items():
-            st.write(f"🇺🇸 {pais.title()}: ${valor:,.4f}")
-        
-        st.info("💡 Para cambiar TRM, usar la página 'Gestión TRM'")
+    def obtener_estadisticas_cuenta(self, account_name: str = None) -> pd.DataFrame:
+        """Obtiene estadísticas de utilidades por cuenta"""
+        try:
+            if account_name:
+                result = self.supabase.table('estadisticas_utilidades').select('*').eq('account_name', account_name).execute()
+            else:
+                result = self.supabase.table('estadisticas_utilidades').select('*').execute()
+            
+            return pd.DataFrame(result.data)
+            
+        except Exception as e:
+            st.error(f"❌ Error obteniendo estadísticas: {str(e)}")
+            return pd.DataFrame()
+    
+    def obtener_historial_trm(self, pais: str = None, dias: int = 30) -> pd.DataFrame:
+        """Obtiene historial de cambios TRM"""
+        try:
+            fecha_limite = (datetime.now() - pd.Timedelta(days=dias)).isoformat()
+            
+            query = self.supabase.table('trm_history').select('*').gte('fecha_cambio', fecha_limite).order('fecha_cambio', desc=True)
+            
+            if pais:
+                query = query.eq('pais', pais)
+            
+            result = query.execute()
+            return pd.DataFrame(result.data)
+            
+        except Exception as e:
+            st.error(f"❌ Error obteniendo historial TRM: {str(e)}")
+            return pd.DataFrame()
 
-def mostrar_gestion_trm():
-    """Página de gestión de TRM"""
-    st.title("💱 Gestión de TRM")
-    st.markdown("### Control de Tasas Representativas del Mercado")
+# Función de utilidad para usar en Streamlit
+@st.cache_resource
+def get_calculador_utilidades():
+    """Factory function para obtener instancia del calculador con cache"""
+    supabase_url = st.secrets["SUPABASE_URL"]
+    supabase_key = st.secrets["SUPABASE_ANON_KEY"]
+    supabase = create_client(supabase_url, supabase_key)
     
-    calculador = get_calculador_utilidades()
-    
-    # Configuración TRM
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("⚙️ Configurar TRM")
-        
-        col_co, col_pe, col_cl = st.columns(3)
-        
-        with col_co:
-            trm_colombia = st.number_input(
-                "🇨🇴 TRM Colombia (COP/USD)", 
-                value=calculador.trm_actual.get('colombia', 4250.0), 
-                step=0.01,
-                format="%.2f"
-            )
-        
-        with col_pe:
-            trm_peru = st.number_input(
-                "🇵🇪 TRM Perú (PEN/USD)", 
-                value=calculador.trm_actual.get('peru', 3.75), 
-                step=0.01,
-                format="%.2f"
-            )
-        
-        with col_cl:
-            trm_chile = st.number_input(
-                "🇨🇱 TRM Chile (CLP/USD)", 
-                value=calculador.trm_actual.get('chile', 850.0), 
-                step=0.01,
-                format="%.2f"
-            )
-        
-        if st.button("💾 Actualizar TRM", type="primary"):
-            nuevas_trm = {
-                'colombia': trm_colombia,
-                'peru': trm_peru,
-                'chile': trm_chile
-            }
-            
-            if calculador.actualizar_trm(nuevas_trm, "usuario_streamlit"):
-                st.success("✅ TRM actualizada exitosamente!")
-                st.rerun()
-    
-    with col2:
-        st.subheader("📊 Estado TRM")
-        
-        for pais, valor in calculador.trm_actual.items():
-            st.metric(f"🇺🇸 {pais.title()}", f"${valor:,.4f}")
-        
-        st.info("🔄 Última actualización: " + datetime.now().strftime("%H:%M:%S"))
-    
-    # Historial de cambios
-    st.subheader("📋 Historial de Cambios")
-    
-    try:
-        historial_df = calculador.obtener_historial_trm(dias=30)
-        
-        if not historial_df.empty:
-            st.dataframe(historial_df, use_container_width=True)
-            
-            # Gráfico de evolución
-            if len(historial_df) > 1:
-                fig = px.line(historial_df, x='fecha_cambio', y='valor_nuevo', 
-                            color='pais', title="Evolución TRM últimos 30 días")
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("📝 No hay cambios registrados en los últimos 30 días")
-    
-    except Exception as e:
-        st.error(f"❌ Error cargando historial: {str(e)}")
-
-def mostrar_dashboard_utilidades():
-    """Dashboard de utilidades"""
-    st.title("📊 Dashboard de Utilidades")
-    st.markdown("### Panel de control y métricas")
-    
-    calculador = get_calculador_utilidades()
-    
-    try:
-        # Obtener estadísticas
-        stats_df = calculador.obtener_estadisticas_cuenta()
-        
-        if not stats_df.empty:
-            # KPIs principales
-            col1, col2, col3, col4 = st.columns(4)
-            
-            total_utilidad = stats_df['utilidad_total_gss'].sum()
-            total_ordenes = stats_df['total_ordenes'].sum()
-            ordenes_positivas = stats_df['ordenes_positivas'].sum()
-            ordenes_negativas = stats_df['ordenes_negativas'].sum()
-            
-            with col1:
-                st.metric("💰 Utilidad Total", f"${total_utilidad:,.2f}")
-            
-            with col2:
-                st.metric("📦 Total Órdenes", f"{total_ordenes:,}")
-            
-            with col3:
-                st.metric("📈 Órdenes Positivas", f"{ordenes_positivas:,}")
-            
-            with col4:
-                st.metric("📉 Órdenes Negativas", f"{ordenes_negativas:,}")
-            
-            # Gráficos
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📊 Utilidad por Cuenta")
-                fig = px.bar(stats_df, x='account_name', y='utilidad_total_gss',
-                           title="Utilidad Total por Cuenta")
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.subheader("📈 Performance por Cuenta")
-                fig = px.scatter(stats_df, x='total_ordenes', y='utilidad_promedio_gss',
-                               color='account_name', size='utilidad_total_gss',
-                               title="Órdenes vs Utilidad Promedio")
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # Tabla detallada
-            st.subheader("📋 Detalle por Cuenta")
-            st.dataframe(stats_df, use_container_width=True)
-        
-        else:
-            st.info("📝 No hay datos de utilidades para mostrar")
-            st.markdown("💡 Primero calcula utilidades en la página 'Cálculo de Utilidades'")
-    
-    except Exception as e:
-        st.error(f"❌ Error cargando dashboard: {str(e)}")
-
-def mostrar_reportes():
-    """Página de reportes"""
-    st.title("📋 Reportes")
-    st.markdown("### Generación de reportes automáticos")
-    st.info("🚧 Funcionalidad en desarrollo - Próximamente disponible")
-
-# IMPORTANTE: Al final, asegúrate de que tu main() se ejecute
-if __name__ == "__main__":
-    main()
+    return CalculadorUtilidades(supabase)
