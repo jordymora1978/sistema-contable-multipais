@@ -195,13 +195,19 @@ def apply_formatting(df):
     # D) Formatear fechas
     date_columns = {
         'date_created': 'YYYY-MM-DD HH:MM',
-        'cxp_date': 'MM/DD/YYYY'
+        'cxp_date': 'MM/DD/YYYY o número Excel'
     }
     
     for col, format_desc in date_columns.items():
         if col in df.columns:
             df[col] = df[col].apply(lambda x: format_date_to_standard(x))
             st.write(f"✅ Formato de fecha aplicado a {col} (era: {format_desc})")
+    
+    # Verificar que fecha_logistics no se sobrescriba en formateo
+    if 'fecha_logistics' in df.columns:
+        # No aplicar formateo adicional a fecha_logistics ya que viene en formato correcto
+        logistics_count = df['fecha_logistics'].notna().sum()
+        st.write(f"✅ Fecha logistics preservada en {logistics_count} registros")
     
     # E) Eliminar duplicados por order_id
     df = remove_duplicates_by_order_id(df)
@@ -450,7 +456,11 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
         for col in standard_cxp_columns:
             if col in cxp_df_normalized.columns:
                 available_cxp_columns.append(col)
-                consolidated_df[f'cxp_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'] = np.nan
+                # Mapear el nombre de la columna correctamente
+                if col == 'Date':
+                    consolidated_df['cxp_date'] = np.nan
+                else:
+                    consolidated_df[f'cxp_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'] = np.nan
         
         st.write(f"📊 Columnas CXP que se procesarán: {available_cxp_columns}")
         
@@ -470,12 +480,18 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
                     matched_cxp += 1
                     
                     for col in available_cxp_columns:
-                        col_name = f'cxp_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'
-                        consolidated_df.loc[idx, col_name] = cxp_row.get(col)
+                        if col == 'Date':
+                            # Formatear la fecha de CXP correctamente
+                            date_value = cxp_row.get(col)
+                            formatted_date = format_date_to_standard(date_value)
+                            consolidated_df.loc[idx, 'cxp_date'] = formatted_date
+                        else:
+                            col_name = f'cxp_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'
+                            consolidated_df.loc[idx, col_name] = cxp_row.get(col)
                     
                     # Debug: mostrar algunos matches
                     if matched_cxp <= 5:
-                        st.write(f"✅ CXP Match {matched_cxp}: Asignacion '{asignacion}' encontrada")
+                        st.write(f"✅ CXP Match {matched_cxp}: Asignacion '{asignacion}' encontrada, fecha: {formatted_date if 'Date' in available_cxp_columns else 'N/A'}")
         
         st.success(f"✅ CXP procesado: {matched_cxp} matches por Asignacion")
     
@@ -670,7 +686,7 @@ def main():
                 
                 # Procesar consolidación usando las reglas específicas
                 consolidated_df = process_files_according_to_rules(
-                    drapify_df, logistics_df, aditionals_df, cxp_df
+                    drapify_df, logistics_df, aditionals_df, cxp_df, logistics_date
                 )
                 
                 # APLICAR FORMATEOS DESPUÉS DE LA CONSOLIDACIÓN
@@ -682,7 +698,7 @@ def main():
                 st.dataframe(consolidated_df.head(10), use_container_width=True)
                 
                 # Mostrar información adicional sobre formateos
-                st.subheader("📊 Información de Formateos Aplicados")
+                st.subheader("📊 Información de Procesamiento")
                 
                 col1, col2 = st.columns(2)
                 
@@ -702,14 +718,22 @@ def main():
                         if col in consolidated_df.columns:
                             st.write(f"• {col}")
                 
+                # Mostrar información de fechas
+                if 'fecha_logistics' in consolidated_df.columns:
+                    logistics_dates = consolidated_df['fecha_logistics'].dropna().unique()
+                    if len(logistics_dates) > 0:
+                        st.write(f"📅 **Fecha de Logistics aplicada:** {logistics_dates[0]}")
+                        registros_con_fecha = consolidated_df['fecha_logistics'].notna().sum()
+                        st.write(f"📊 **Registros con fecha Logistics:** {registros_con_fecha}")
+                
                 # Mostrar muestras de fechas formateadas
                 if 'date_created' in consolidated_df.columns:
                     sample_dates = consolidated_df['date_created'].dropna().head(3).tolist()
-                    st.write(f"📅 **Ejemplos de fechas formateadas (date_created):** {sample_dates}")
+                    st.write(f"📅 **Ejemplos de fechas Drapify:** {sample_dates}")
                 
                 if 'cxp_date' in consolidated_df.columns:
                     sample_cxp_dates = consolidated_df['cxp_date'].dropna().head(3).tolist()
-                    st.write(f"📅 **Ejemplos de fechas CXP formateadas:** {sample_cxp_dates}")
+                    st.write(f"📅 **Ejemplos de fechas CXP:** {sample_cxp_dates}")
                 
                 # Mostrar estadísticas detalladas
                 col1, col2, col3, col4 = st.columns(4)
