@@ -290,7 +290,17 @@ def insert_to_supabase_with_validation(df):
                 status_text.text(f"Insertando lote {i//batch_size + 1}... ({total_inserted}/{len(cleaned_records)})")
                 
             except Exception as batch_error:
-                st.error(f"Error en lote {i//batch_size + 1}: {str(batch_error)}")
+                # DIAGNÓSTICO DETALLADO DEL ERROR
+                error_msg = str(batch_error)
+                st.error(f"Error en lote {i//batch_size + 1}: {error_msg}")
+                
+                # Mostrar detalles del primer registro del lote para debugging
+                if i == 0:  # Solo para el primer lote
+                    st.error("🔍 DEBUGGING - Primer registro del lote:")
+                    st.json(batch[0])
+                    st.error("🔍 DEBUGGING - Columnas disponibles en tabla:")
+                    st.write(list(available_columns) if available_columns else "No se pudo obtener")
+                    
                 errors += len(batch)
                 continue
         
