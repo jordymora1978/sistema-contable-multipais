@@ -479,14 +479,20 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
             'Amt. Due': 'Amt. Due',
             'Goods Value': 'Goods Value',
             
-            # Formato archivo grande -> formato estándar
+            # Formato archivo grande -> formato estándar (con espacios extra)
             'ot_number': 'OT Number',
             'date': 'Date',
             'consignee': 'Consignee', 
             'co_aereo': 'CO Aereo',
+            ' co_aereo ': 'CO Aereo',  # Con espacios
             'arancel': 'Arancel',
+            ' arancel ': 'Arancel',   # Con espacios
             'iva': 'IVA',
-            'dest_delivery': 'Dest. Delivery'
+            ' iva ': 'IVA',           # Con espacios
+            'dest_delivery': 'Dest. Delivery',
+            ' dest_delivery ': 'Dest. Delivery',  # Con espacios
+            ' Amt. Due ': 'Amt. Due', # Con espacios
+            ' Goods Value ': 'Goods Value'  # Con espacios
         }
         
         # Aplicar mapeo de columnas
