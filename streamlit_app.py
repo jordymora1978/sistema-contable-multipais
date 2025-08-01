@@ -24,6 +24,22 @@ layout="wide",
 initial_sidebar_state="expanded"
 )
 
+# INICIALIZAR SESSION STATE
+def init_session_state():
+"""Inicializa todas las variables de session_state necesarias"""
+if 'consolidated_data' not in st.session_state:
+st.session_state.consolidated_data = None
+if 'processing_complete' not in st.session_state:
+st.session_state.processing_complete = False
+if 'utilidades_data' not in st.session_state:
+st.session_state.utilidades_data = None
+if 'utilidades_calculated' not in st.session_state:
+st.session_state.utilidades_calculated = False
+if 'processing_stats' not in st.session_state:
+st.session_state.processing_stats = {}
+if 'last_processing_time' not in st.session_state:
+st.session_state.last_processing_time = None
+
 # Configuración de Supabase
 @st.cache_resource
 def init_supabase():
@@ -166,9 +182,47 @@ return True, "Conexión exitosa"
 except Exception as e:
 return False, str(e)
 
+def clear_session_data():
+"""Limpia todos los datos de la sesión"""
+st.session_state.consolidated_data = None
+st.session_state.processing_complete = False
+st.session_state.utilidades_data = None
+st.session_state.utilidades_calculated = False
+st.session_state.processing_stats = {}
+st.session_state.last_processing_time = None
+
 # PÁGINAS DE LA APLICACIÓN
 def mostrar_consolidador(processing_mode):
-"""Página del consolidador de archivos - COMPLETA"""
+"""Página del consolidador de archivos - MEJORADA CON PERSISTENCIA"""
+
+# Mostrar estado de datos existentes si los hay
+if st.session_state.processing_complete and st.session_state.consolidated_data is not None:
+st.success(f"✅ Datos ya procesados: {len(st.session_state.consolidated_data)} registros")
+st.info(f"🕒 Procesado el: {st.session_state.last_processing_time}")
+
+col_clear, col_export = st.columns([1, 2])
+
+with col_clear:
+if st.button("🗑️ Limpiar Datos", type="secondary"):
+clear_session_data()
+st.rerun()
+
+with col_export:
+# Botón de descarga siempre disponible
+csv_buffer = io.StringIO()
+st.session_state.consolidated_data.to_csv(csv_buffer, index=False)
+csv_data = csv_buffer.getvalue()
+
+st.download_button(
+label="📥 Descargar CSV Consolidado",
+data=csv_data,
+file_name=f"consolidated_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+mime="text/csv",
+type="primary"
+)
+
+st.info("💡 Puedes cargar nuevos archivos abajo para reemplazar estos datos")
+st.markdown("---")
 
 col1, col2 = st.columns([2, 1])
 
@@ -259,8 +313,9 @@ st.success("✅ Listo para procesar")
 else:
 st.warning("⚠️ Archivo Drapify requerido")
 
-# BOTÓN DE PROCESAMIENTO
-if st.button("🚀 Procesar Archivos", disabled=not drapify_file, type="primary"):
+# BOTÓN DE PROCESAMIENTO - Siempre habilitado si hay archivo Drapify
+button_text = "🔄 Reprocesar Archivos" if st.session_state.processing_complete else "🚀 Procesar Archivos"
+if st.button(button_text, disabled=not drapify_file, type="primary"):
 
 with st.spinner("Procesando archivos..."):
 try:
@@ -306,41 +361,22 @@ drapify_df, logistics_df, aditionals_df, cxp_df, logistics_date
 st.header("🎨 Aplicando Formateos")
 consolidated_df = apply_formatting(consolidated_df)
 
-# Mostrar preview
-st.header("👀 Preview de Datos Consolidados")
-st.dataframe(consolidated_df.head(10), use_container_width=True)
+# GUARDAR EN SESSION STATE (sobrescribir datos anteriores)
+st.session_state.consolidated_data = consolidated_df
+st.session_state.processing_complete = True
+st.session_state.last_processing_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+st.session_state.processing_stats = {
+'total_registros': len(consolidated_df),
+'asignaciones': consolidated_df['Asignacion'].notna().sum() if 'Asignacion' in consolidated_df.columns else 0,
+'con_fecha_logistics': consolidated_df['fecha_logistics'].notna().sum() if 'fecha_logistics' in consolidated_df.columns else 0,
+'columnas': len(consolidated_df.columns)
+}
 
-# Estadísticas
-col1, col2, col3, col4 = st.columns(4)
+# Limpiar utilidades anteriores al reprocesar
+st.session_state.utilidades_data = None
+st.session_state.utilidades_calculated = False
 
-with col1:
-st.metric("Total Registros", len(consolidated_df))
-
-with col2:
-asignaciones = consolidated_df['Asignacion'].notna().sum() if 'Asignacion' in consolidated_df.columns else 0
-st.metric("Asignaciones", asignaciones)
-
-with col3:
-con_fecha = consolidated_df['fecha_logistics'].notna().sum() if 'fecha_logistics' in consolidated_df.columns else 0
-st.metric("Con Fecha Logistics", con_fecha)
-
-with col4:
-st.metric("Columnas", len(consolidated_df.columns))
-
-# Opción de descarga
-st.header("💾 Descargar Resultado")
-
-csv_buffer = io.StringIO()
-consolidated_df.to_csv(csv_buffer, index=False)
-csv_data = csv_buffer.getvalue()
-
-st.download_button(
-label="📥 Descargar CSV Consolidado",
-data=csv_data,
-file_name=f"consolidated_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-mime="text/csv",
-type="primary"
-)
+st.success("💾 Datos guardados en memoria (datos anteriores reemplazados)")
 
 # Insertar en BD si se seleccionó
 if processing_mode == "Consolidar e insertar en DB":
@@ -356,25 +392,147 @@ st.balloons()
 else:
 st.error("❌ Error insertando datos")
 
+st.rerun()  # Refrescar para mostrar los datos
+
 except Exception as e:
 st.error(f"❌ Error procesando archivos: {str(e)}")
 st.exception(e)
 
+# MOSTRAR DATOS PROCESADOS SI EXISTEN
+if st.session_state.processing_complete and st.session_state.consolidated_data is not None:
+st.header("📊 Datos Consolidados")
+
+# Estadísticas
+col1, col2, col3, col4 = st.columns(4)
+
+stats = st.session_state.processing_stats
+
+with col1:
+st.metric("Total Registros", stats.get('total_registros', 0))
+
+with col2:
+st.metric("Asignaciones", stats.get('asignaciones', 0))
+
+with col3:
+st.metric("Con Fecha Logistics", stats.get('con_fecha_logistics', 0))
+
+with col4:
+st.metric("Columnas", stats.get('columnas', 0))
+
+# Preview de datos
+st.header("👀 Preview de Datos")
+st.dataframe(st.session_state.consolidated_data.head(20), use_container_width=True)
+
+# Información de columnas
+with st.expander("📋 Ver todas las columnas"):
+st.write("Columnas disponibles:")
+for i, col in enumerate(st.session_state.consolidated_data.columns, 1):
+st.write(f"{i}. {col}")
+
 def mostrar_calculo_utilidades():
+"""Página de cálculo de utilidades - MEJORADA"""
 st.title("💰 Cálculo de Utilidades")
+
 if not UTILIDADES_AVAILABLE:
 st.warning("⚠️ Módulo de utilidades no disponible")
 return
+
+# Verificar si hay datos consolidados
+if not st.session_state.processing_complete or st.session_state.consolidated_data is None:
+st.warning("⚠️ Primero debes consolidar archivos en la página principal")
+st.info("👈 Ve a 'Consolidador de Archivos' para procesar datos")
+return
+
 try:
-calculador = get_calculador_utilidades()
+calculadora = get_calculador_utilidades()
 st.success("✅ Módulo de utilidades cargado")
+
+# Mostrar TRM actual
 col1, col2, col3 = st.columns(3)
 with col1:
-st.metric("🇨🇴 Colombia", f"${calculador.trm_actual.get('colombia', 0):,.2f}")
+st.metric("🇨🇴 Colombia", f"${calculadora.trm_actual.get('colombia', 0):,.2f}")
 with col2:
-st.metric("🇵🇪 Perú", f"${calculador.trm_actual.get('peru', 0):,.2f}")
+st.metric("🇵🇪 Perú", f"${calculadora.trm_actual.get('peru', 0):,.2f}")
 with col3:
-st.metric("🇨🇱 Chile", f"${calculador.trm_actual.get('chile', 0):,.2f}")
+st.metric("🇨🇱 Chile", f"${calculadora.trm_actual.get('chile', 0):,.2f}")
+
+st.markdown("---")
+
+# Información de datos disponibles
+st.info(f"📊 Datos disponibles: {len(st.session_state.consolidated_data)} registros consolidados")
+
+# Botón para calcular utilidades
+if st.button("🚀 Calcular Utilidades", type="primary", use_container_width=True):
+with st.spinner("Calculando utilidades..."):
+try:
+# Calcular utilidades
+utilidades_df = calculadora.calcular_utilidades_por_cuenta(st.session_state.consolidated_data)
+
+# Guardar en session state
+st.session_state.utilidades_data = utilidades_df
+st.session_state.utilidades_calculated = True
+
+st.success("✅ Utilidades calculadas correctamente")
+st.rerun()
+
+except Exception as e:
+st.error(f"❌ Error calculando utilidades: {str(e)}")
+st.exception(e)
+
+# Mostrar resultados si existen
+if st.session_state.utilidades_calculated and st.session_state.utilidades_data is not None:
+st.header("📊 Resultados de Utilidades")
+
+# Estadísticas generales
+utilidades_df = st.session_state.utilidades_data
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+total_utilidad = utilidades_df['Utilidad Gss'].sum()
+st.metric("Utilidad Total", f"${total_utilidad:,.2f}")
+
+with col2:
+registros_con_utilidad = utilidades_df['Utilidad Gss'].notna().sum()
+st.metric("Registros Calculados", registros_con_utilidad)
+
+with col3:
+utilidad_promedio = utilidades_df['Utilidad Gss'].mean()
+st.metric("Utilidad Promedio", f"${utilidad_promedio:,.2f}")
+
+with col4:
+if 'Utilidad Socio' in utilidades_df.columns:
+total_socio = utilidades_df['Utilidad Socio'].sum()
+st.metric("Utilidad Socio", f"${total_socio:,.2f}")
+
+# Preview de datos
+st.subheader("👀 Preview de Utilidades")
+st.dataframe(utilidades_df.head(20), use_container_width=True)
+
+# Descarga de resultados
+st.subheader("💾 Descargar Resultados")
+
+csv_buffer = io.StringIO()
+utilidades_df.to_csv(csv_buffer, index=False)
+csv_data = csv_buffer.getvalue()
+
+st.download_button(
+label="📥 Descargar Utilidades CSV",
+data=csv_data,
+file_name=f"utilidades_calculadas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+mime="text/csv",
+type="primary"
+)
+
+# Opción para guardar en BD
+if st.button("💾 Guardar en Base de Datos", type="secondary"):
+with st.spinner("Guardando en base de datos..."):
+if calculadora.guardar_utilidades_en_bd(utilidades_df):
+st.success("✅ Utilidades guardadas en base de datos")
+st.balloons()
+else:
+st.error("❌ Error guardando en base de datos")
+
 except Exception as e:
 st.error(f"❌ Error: {str(e)}")
 
@@ -464,15 +622,118 @@ except Exception as e:
 st.error(f"❌ Error: {str(e)}")
 
 def mostrar_dashboard_utilidades():
+"""Dashboard con visualizaciones de utilidades"""
 st.title("📊 Dashboard de Utilidades")
-st.info("📝 No hay datos de utilidades para mostrar")
+
+if not st.session_state.utilidades_calculated or st.session_state.utilidades_data is None:
+st.warning("⚠️ No hay datos de utilidades calculadas")
+st.info("👈 Ve a 'Cálculo de Utilidades' para procesar datos")
+return
+
+utilidades_df = st.session_state.utilidades_data
+
+# Estadísticas generales
+st.subheader("📈 Resumen General")
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+total_utilidad = utilidades_df['Utilidad Gss'].sum()
+st.metric("💰 Utilidad Total", f"${total_utilidad:,.2f}")
+
+with col2:
+registros_positivos = (utilidades_df['Utilidad Gss'] > 0).sum()
+st.metric("📈 Utilidades Positivas", registros_positivos)
+
+with col3:
+registros_negativos = (utilidades_df['Utilidad Gss'] < 0).sum()
+st.metric("📉 Utilidades Negativas", registros_negativos)
+
+with col4:
+utilidad_promedio = utilidades_df['Utilidad Gss'].mean()
+st.metric("📊 Promedio", f"${utilidad_promedio:,.2f}")
+
+# Análisis por cuenta
+st.subheader("🏢 Análisis por Cuenta")
+
+if 'account_name' in utilidades_df.columns:
+utilidades_por_cuenta = utilidades_df.groupby('account_name')['Utilidad Gss'].agg(['sum', 'count', 'mean']).reset_index()
+utilidades_por_cuenta.columns = ['Cuenta', 'Utilidad Total', 'Cantidad', 'Utilidad Promedio']
+utilidades_por_cuenta = utilidades_por_cuenta.sort_values('Utilidad Total', ascending=False)
+
+st.dataframe(utilidades_por_cuenta, use_container_width=True)
+
+# Top y Bottom performers
+st.subheader("🏆 Top y Bottom Performers")
+
+col1, col2 = st.columns(2)
+
+with col1:
+st.markdown("🔝 Top 10 Mejores Utilidades")
+top_utilidades = utilidades_df.nlargest(10, 'Utilidad Gss')[['Serial#', 'account_name', 'Utilidad Gss']]
+st.dataframe(top_utilidades, use_container_width=True)
+
+with col2:
+st.markdown("🔻 Top 10 Peores Utilidades")
+bottom_utilidades = utilidades_df.nsmallest(10, 'Utilidad Gss')[['Serial#', 'account_name', 'Utilidad Gss']]
+st.dataframe(bottom_utilidades, use_container_width=True)
 
 def mostrar_reportes():
+"""Página de reportes"""
 st.title("📋 Reportes")
-st.info("🚧 Funcionalidad en desarrollo")
+
+if not st.session_state.processing_complete:
+st.warning("⚠️ No hay datos consolidados disponibles")
+st.info("👈 Ve a 'Consolidador de Archivos' para procesar datos")
+return
+
+st.subheader("📊 Reportes Disponibles")
+
+col1, col2 = st.columns(2)
+
+with col1:
+st.info("📈 Reporte de Consolidación")
+st.write(f"• Total registros: {len(st.session_state.consolidated_data)}")
+st.write(f"• Columnas: {len(st.session_state.consolidated_data.columns)}")
+
+if st.button("📥 Descargar Consolidado", key="download_consolidated"):
+csv_buffer = io.StringIO()
+st.session_state.consolidated_data.to_csv(csv_buffer, index=False)
+csv_data = csv_buffer.getvalue()
+
+st.download_button(
+label="📄 Descargar CSV",
+data=csv_data,
+file_name=f"reporte_consolidado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+mime="text/csv"
+)
+
+with col2:
+if st.session_state.utilidades_calculated:
+st.info("💰 Reporte de Utilidades")
+total_utilidad = st.session_state.utilidades_data['Utilidad Gss'].sum()
+st.write(f"• Utilidad total: ${total_utilidad:,.2f}")
+st.write(f"• Registros calculados: {len(st.session_state.utilidades_data)}")
+
+if st.button("📥 Descargar Utilidades", key="download_utilidades"):
+csv_buffer = io.StringIO()
+st.session_state.utilidades_data.to_csv(csv_buffer, index=False)
+csv_data = csv_buffer.getvalue()
+
+st.download_button(
+label="📄 Descargar CSV",
+data=csv_data,
+file_name=f"reporte_utilidades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+mime="text/csv"
+)
+else:
+st.warning("⚠️ No hay utilidades calculadas")
 
 # FUNCIÓN PRINCIPAL
 def main():
+# Inicializar session state
+init_session_state()
+
 st.title("💰 Sistema de Gestión Integral")
 st.markdown("### Consolidación de archivos y cálculo de utilidades")
 
@@ -490,7 +751,17 @@ st.error("❌ Sin conexión BD")
 
 st.markdown("---")
 
-# NAVEGACIÓN SIEMPRE CON 5 OPCIONES
+# Estado de la sesión
+if st.session_state.processing_complete:
+st.success(f"📊 Datos: {len(st.session_state.consolidated_data)} registros")
+
+if st.session_state.utilidades_calculated:
+total_utilidad = st.session_state.utilidades_data['Utilidad Gss'].sum()
+st.info(f"💰 Utilidades: ${total_utilidad:,.0f}")
+
+st.markdown("---")
+
+# NAVEGACIÓN
 pagina = st.selectbox("📋 Navegación", [
 "🏠 Consolidador de Archivos",
 "💰 Cálculo de Utilidades",
@@ -501,6 +772,12 @@ pagina = st.selectbox("📋 Navegación", [
 
 st.markdown("---")
 processing_mode = st.radio("Modo:", ["Solo consolidar", "Consolidar e insertar en DB"])
+
+# Botón para limpiar toda la sesión
+if st.session_state.processing_complete or st.session_state.utilidades_calculated:
+if st.button("🗑️ Limpiar Todo", type="secondary"):
+clear_session_data()
+st.rerun()
 
 # ROUTING
 if pagina == "🏠 Consolidador de Archivos":
