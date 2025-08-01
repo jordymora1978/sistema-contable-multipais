@@ -615,11 +615,41 @@ def insert_to_supabase(df):
                     record[key] = value  # Mantener como texto
                 elif pd.isna(value):
                     record[key] = None
+                elif isinstance(value, (pd.Timestamp, datetime)):
+                    # Convertir fechas a string ISO format
+                    record[key] = value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)
+                elif isinstance(value, str) and value.endswith('.0'):
+                    # Convertir "0.0" a entero si es necesario
+                    try:
+                        float_val = float(value)
+                        if float_val.is_integer():
+                            record[key] = int(float_val)
+                        else:
+                            record[key] = float_val
+                    except:
+                        record[key] = value
                 elif isinstance(value, (np.integer, np.floating)):
                     if np.isfinite(value):
-                        record[key] = float(value) if isinstance(value, np.floating) else int(value)
+                        # Convertir a int si es un número entero, float si tiene decimales
+                        if isinstance(value, np.floating) and value == int(value):
+                            record[key] = int(value)
+                        else:
+                            record[key] = float(value) if isinstance(value, np.floating) else int(value)
                     else:
                         record[key] = None
+                elif isinstance(value, str):
+                    # Intentar convertir strings que parecen números
+                    try:
+                        if '.' in value:
+                            float_val = float(value)
+                            if float_val.is_integer():
+                                record[key] = int(float_val)
+                            else:
+                                record[key] = float_val
+                        else:
+                            record[key] = int(value)
+                    except:
+                        record[key] = value  # Mantener como string si no se puede convertir
         
         # Verificación adicional de duplicados por order_id
         order_ids = [r.get('order_id') for r in records if r.get('order_id')]
