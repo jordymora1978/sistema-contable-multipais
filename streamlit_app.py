@@ -607,45 +607,19 @@ def insert_to_supabase(df):
         # Preparar datos para inserción
         records = df_filtered.to_dict('records')
         
-        # VOLVER A LA SOLUCIÓN SIMPLE + LOGGING PARA DIAGNOSTICAR
-        st.info("🔧 Aplicando conversión simple con diagnóstico...")
-        
-        # LOGGING: Mostrar un registro de ejemplo ANTES de la conversión
-        if records:
-            st.write("🔍 DIAGNÓSTICO - Registro ejemplo ANTES de conversión:")
-            sample_record = records[0]
-            for key, value in sample_record.items():
-                if str(value) == "0.0":
-                    st.error(f"❌ ENCONTRADO '0.0' en columna: {key} = {value} (tipo: {type(value)})")
-                elif "0.0" in str(value):
-                    st.warning(f"⚠️ Contiene '0.0' en columna: {key} = {value} (tipo: {type(value)})")
-        
+        # Limpiar valores NaN y convertir tipos de datos
         for record in records:
             for key, value in record.items():
-                if pd.isna(value) or value is None:
+                # Preservar columnas CXP como texto (mantener formato original)
+                if key.startswith('cxp_') and isinstance(value, str):
+                    record[key] = value  # Mantener como texto
+                elif pd.isna(value):
                     record[key] = None
-                elif isinstance(value, (pd.Timestamp, datetime)):
-                    # Convertir fechas a string ISO format
-                    record[key] = value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)
                 elif isinstance(value, (np.integer, np.floating)):
                     if np.isfinite(value):
                         record[key] = float(value) if isinstance(value, np.floating) else int(value)
                     else:
                         record[key] = None
-                elif str(value) == "0.0":
-                    # CONVERSIÓN DIRECTA del problema específico
-                    record[key] = 0
-                    st.info(f"🔧 Convertido '0.0' a 0 en columna: {key}")
-        
-        # LOGGING: Mostrar el mismo registro DESPUÉS de la conversión
-        if records:
-            st.write("🔍 DIAGNÓSTICO - Mismo registro DESPUÉS de conversión:")
-            sample_record = records[0]
-            for key, value in sample_record.items():
-                if str(value) == "0.0":
-                    st.error(f"❌ TODAVÍA EXISTE '0.0' en columna: {key} = {value} (tipo: {type(value)})")
-                elif key in ['system_number', 'serial_number', 'quantity', 'ica']:
-                    st.info(f"✅ Columna INTEGER: {key} = {value} (tipo: {type(value)})")
         
         # Verificación adicional de duplicados por order_id
         order_ids = [r.get('order_id') for r in records if r.get('order_id')]
