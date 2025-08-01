@@ -102,7 +102,7 @@ def read_file_optimized(file_obj, file_type="unknown"):
         return None
 
 def optimize_dataframe_memory(df):
-    """Optimiza el uso de memoria del DataFrame"""
+    """Optimiza el uso de memoria del DataFrame de forma segura"""
     if df is None or df.empty:
         return df
     
@@ -111,27 +111,41 @@ def optimize_dataframe_memory(df):
     try:
         initial_memory = df.memory_usage(deep=True).sum() / 1024**2
         
-        # Optimizar tipos de datos
+        # Columnas que NO se deben convertir a category (datos mixtos)
+        mixed_data_columns = [
+            'street_number', 'address_line', 'street_name', 'title', 
+            'client_doc_id', 'receiver_phone', 'order_id', 'prealert_id',
+            'amz_order_id', 'pack_id', 'system_number', 'serial_number'
+        ]
+        
+        # Optimizar tipos de datos de forma conservadora
         for col in df.columns:
             col_type = df[col].dtype
             
-            # Convertir object a category si tiene pocos valores únicos
-            if col_type == 'object':
+            # Solo convertir a category columnas específicas y seguras
+            if col_type == 'object' and col not in mixed_data_columns:
                 try:
                     unique_ratio = df[col].nunique() / len(df)
-                    if unique_ratio < 0.5:  # Si menos del 50% son únicos
-                        df[col] = df[col].astype('category')
-                except:
-                    pass  # Si falla, continuar
+                    # Solo convertir si tiene muy pocos valores únicos y son consistentes
+                    if unique_ratio < 0.1 and df[col].nunique() < 50:
+                        # Verificar que no haya datos mixtos
+                        sample_values = df[col].dropna().astype(str).str.strip()
+                        if not any(sample_values.str.contains(r'[#\-\+/]', na=False)):
+                            df[col] = df[col].astype('category')
+                except Exception as e:
+                    # Si hay cualquier error, mantener como object
+                    pass
             
-            # Optimizar enteros
-            elif col_type in ['int64']:
+            # Optimizar enteros solo si son realmente numéricos
+            elif col_type in ['int64'] and col not in mixed_data_columns:
                 try:
-                    df[col] = pd.to_numeric(df[col], downcast='integer')
+                    # Verificar que no haya valores mixtos
+                    if not df[col].astype(str).str.contains(r'[a-zA-Z#\-\+/]', na=False).any():
+                        df[col] = pd.to_numeric(df[col], downcast='integer')
                 except:
                     pass
             
-            # Optimizar flotantes
+            # Optimizar flotantes de forma segura
             elif col_type in ['float64']:
                 try:
                     df[col] = pd.to_numeric(df[col], downcast='float')
@@ -145,6 +159,10 @@ def optimize_dataframe_memory(df):
         
     except Exception as e:
         st.warning(f"⚠️ Error optimizando memoria: {str(e)}")
+        # En caso de error, asegurar que todas las columnas problemáticas sean object
+        for col in ['street_number', 'address_line', 'street_name', 'title']:
+            if col in df.columns:
+                df[col] = df[col].astype('object')
     
     return df
 
@@ -319,7 +337,7 @@ def apply_basic_formatting(df):
     
     st.info("🔧 Aplicando formatos básicos...")
     
-    # Corrección de encoding en columnas de texto
+    # Corrección de encoding y limpieza en columnas de texto
     text_columns = [
         'client_first_name', 'client_last_name', 'title', 'address_line', 
         'street_name', 'city', 'state', 'country', 'nombre_del_tercero',
@@ -329,9 +347,19 @@ def apply_basic_formatting(df):
     for col in text_columns:
         if col in df.columns:
             try:
-                df[col] = df[col].astype(str).str.strip()
-            except:
-                pass
+                # Convertir a string y limpiar, manteniendo valores nulos
+                df[col] = df[col].astype(str).replace('nan', '').str.strip()
+                df[col] = df[col].replace('', None)  # Convertir strings vacíos a None
+            except Exception as e:
+                st.warning(f"⚠️ Error procesando columna {col}: {str(e)}")
+                # Asegurar que sea tipo object
+                df[col] = df[col].astype('object')
+    
+    # Asegurar que columnas mixtas sean object
+    mixed_columns = ['street_number', 'client_doc_id', 'receiver_phone', 'order_id', 'prealert_id']
+    for col in mixed_columns:
+        if col in df.columns:
+            df[col] = df[col].astype('object')
     
     st.success("✅ Formatos básicos aplicados")
     return df
@@ -593,9 +621,46 @@ def main():
                     drapify_df, logistics_df, aditionals_df, cxp_df
                 )
                 
-                # Mostrar preview limitado
+                # Mostrar preview limitado con manejo seguro de tipos
                 st.header("👀 Preview de Datos (Primeros 20 registros)")
-                st.dataframe(consolidated_df.head(20), use_container_width=True)
+                
+                # Crear copia segura para mostrar
+                try:
+                    display_df = consolidated_df.head(20).copy()
+                    
+                    # Convertir columnas problemáticas a string para visualización
+                    problem_columns = ['street_number', 'address_line', 'street_name', 'title', 
+                                     'client_doc_id', 'receiver_phone', 'order_id', 'prealert_id']
+                    
+                    for col in problem_columns:
+                        if col in display_df.columns:
+                            display_df[col] = display_df[col].astype(str)
+                    
+                    # Asegurar que todas las columnas category sean convertidas a string
+                    for col in display_df.columns:
+                        if display_df[col].dtype.name == 'category':
+                            display_df[col] = display_df[col].astype(str)
+                    
+                    st.dataframe(display_df, use_container_width=True)
+                    
+                except Exception as display_error:
+                    st.warning(f"⚠️ Error mostrando preview: {display_error}")
+                    # Mostrar información básica sin el dataframe
+                    st.info(f"✅ Datos procesados exitosamente: {len(consolidated_df):,} registros")
+                    st.info(f"📊 Columnas disponibles: {len(consolidated_df.columns)}")
+                    
+                    # Mostrar solo las primeras columnas como texto
+                    try:
+                        st.text("Primeras 5 filas (solo texto):")
+                        for i in range(min(5, len(consolidated_df))):
+                            row_data = []
+                            for col in list(consolidated_df.columns)[:5]:  # Solo las primeras 5 columnas
+                                value = consolidated_df.iloc[i][col]
+                                row_data.append(f"{col}: {value}")
+                            st.text(f"Fila {i+1}: {', '.join(row_data)}")
+                    except:
+                        st.info("Datos procesados pero no se puede mostrar preview")
+
                 
                 # Estadísticas
                 st.header("📊 Estadísticas del Procesamiento")
