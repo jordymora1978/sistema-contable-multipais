@@ -607,51 +607,64 @@ def insert_to_supabase(df):
         # Preparar datos para inserción
         records = df_filtered.to_dict('records')
         
-        # Limpiar valores NaN y convertir tipos de datos de manera más agresiva
+        # SOLUCIÓN DIRECTA: Identificar y convertir campos INTEGER específicos
+        st.info("🔧 Convirtiendo tipos de datos específicos...")
+        
+        # Columnas que DEBEN ser INTEGER en la base de datos
+        integer_columns = [
+            'system_number', 'serial_number', 'quantity', 'ica'
+        ]
+        
+        # Columnas que DEBEN ser FLOAT en la base de datos
+        float_columns = [
+            'unit_price', 'declare_value', 'meli_fee', 'iva', 'fuente',
+            'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount',
+            'digital_verification', 'logistic_weight_lbs', 'prealert_id'
+        ]
+        
         for record in records:
             for key, value in record.items():
-                if pd.isna(value):
+                if pd.isna(value) or value is None:
                     record[key] = None
                 elif isinstance(value, (pd.Timestamp, datetime)):
-                    # Convertir fechas a string ISO format
                     record[key] = value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)
-                elif isinstance(value, str):
-                    # Manejo agresivo de strings
-                    if key.startswith('cxp_'):
-                        # Preservar columnas CXP como texto
+                elif key.startswith('cxp_'):
+                    # Preservar columnas CXP como texto
+                    record[key] = str(value) if value is not None else None
+                elif key in integer_columns:
+                    # Forzar conversión a INTEGER
+                    try:
+                        if isinstance(value, str):
+                            if value == "0.0" or value == "":
+                                record[key] = 0
+                            elif value.endswith('.0'):
+                                record[key] = int(float(value))
+                            elif value.isdigit():
+                                record[key] = int(value)
+                            else:
+                                record[key] = 0  # Valor por defecto para INTEGER
+                        else:
+                            record[key] = int(float(value)) if value != 0 else 0
+                    except:
+                        record[key] = 0  # Valor por defecto seguro
+                elif key in float_columns:
+                    # Forzar conversión a FLOAT
+                    try:
+                        if isinstance(value, str):
+                            if value == "" or value == "0.0":
+                                record[key] = 0.0
+                            else:
+                                record[key] = float(value)
+                        else:
+                            record[key] = float(value)
+                    except:
+                        record[key] = 0.0  # Valor por defecto seguro
+                else:
+                    # Para otros campos, mantener como string o convertir cuidadosamente
+                    if isinstance(value, str):
                         record[key] = value
                     else:
-                        # Intentar convertir cualquier string numérico
-                        try:
-                            # Si el string termina en .0, convertir a entero
-                            if value.endswith('.0'):
-                                record[key] = int(float(value))
-                            elif '.' in value:
-                                # Si tiene decimal, convertir a float
-                                float_val = float(value)
-                                # Si es realmente un entero (como 5.0), convertir a int
-                                if float_val == int(float_val):
-                                    record[key] = int(float_val)
-                                else:
-                                    record[key] = float_val
-                            else:
-                                # Sin decimales, intentar convertir a entero
-                                record[key] = int(value)
-                        except (ValueError, TypeError):
-                            # Si no se puede convertir, mantener como string
-                            record[key] = value
-                elif isinstance(value, (np.integer, np.floating)):
-                    if np.isfinite(value):
-                        # Manejar tipos numpy
-                        if isinstance(value, np.floating) and value == int(value):
-                            record[key] = int(value)
-                        else:
-                            record[key] = float(value) if isinstance(value, np.floating) else int(value)
-                    else:
-                        record[key] = None
-                else:
-                    # Para cualquier otro tipo, convertir a string
-                    record[key] = str(value) if value is not None else None
+                        record[key] = str(value) if value is not None else None
         
         # Verificación adicional de duplicados por order_id
         order_ids = [r.get('order_id') for r in records if r.get('order_id')]
