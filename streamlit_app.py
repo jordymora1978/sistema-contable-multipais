@@ -46,6 +46,22 @@ def clean_numeric_value(value, target_type='float'):
     if value is None:
         return None
     
+    # Si ya es un entero válido, devolverlo
+    if isinstance(value, int):
+        return value if target_type == 'integer' else float(value)
+    
+    # Si es float y target_type es integer, convertir
+    if isinstance(value, float):
+        if target_type == 'integer':
+            # Si es un float como 123.0, convertir a entero
+            if value == int(value):
+                return int(value)
+            else:
+                # Si tiene decimales reales, redondear
+                return round(value)
+        else:
+            return value  # Mantener como float
+    
     # Convertir a string para limpiar
     str_val = str(value).strip()
     
@@ -54,14 +70,8 @@ def clean_numeric_value(value, target_type='float'):
         return None
     
     try:
-        # Remover caracteres no numéricos excepto punto y signo negativo
-        cleaned = ''.join(c for c in str_val if c.isdigit() or c in '.-')
-        
-        if not cleaned or cleaned in ['.', '-', '-.']:
-            return None
-        
-        # Convertir a float primero
-        float_val = float(cleaned)
+        # Primero intentar convertir directamente a float
+        float_val = float(str_val)
         
         # Si target_type es integer, convertir y validar
         if target_type == 'integer':
@@ -75,7 +85,27 @@ def clean_numeric_value(value, target_type='float'):
             return float_val
             
     except (ValueError, TypeError):
-        return None
+        try:
+            # Si falla la conversión directa, limpiar caracteres
+            cleaned = ''.join(c for c in str_val if c.isdigit() or c in '.-')
+            
+            if not cleaned or cleaned in ['.', '-', '-.']:
+                return None
+            
+            # Convertir a float primero
+            float_val = float(cleaned)
+            
+            # Si target_type es integer, convertir y validar
+            if target_type == 'integer':
+                if float_val == int(float_val):
+                    return int(float_val)
+                else:
+                    return round(float_val)
+            else:
+                return float_val
+                
+        except (ValueError, TypeError):
+            return None
 
 def clean_datetime_value(value):
     """Limpia y convierte valores de fecha/hora para la BD"""
@@ -673,7 +703,7 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     st.success(f"🎉 Consolidación completada: {len(consolidated_df)} registros finales")
     return consolidated_df
 
-# Función para insertar datos en Supabase - VERSIÓN CORREGIDA
+# Función para insertar datos en Supabase - VERSIÓN CORREGIDA FINAL
 def insert_to_supabase(df):
     """Inserta los datos consolidados en Supabase con validación de duplicados"""
     try:
@@ -707,15 +737,30 @@ def insert_to_supabase(df):
         
         st.info(f"📊 Preparando {len(df_filtered)} registros con {len(df_filtered.columns)} columnas")
         
-        # NUEVA LÓGICA DE LIMPIEZA DE DATOS
+        # NUEVA LÓGICA DE LIMPIEZA DE DATOS CON DEBUG Y FIX ESPECÍFICO
         st.info("🧹 Limpiando tipos de datos...")
         
         # Identificar tipos de columnas
         integer_cols, float_cols, datetime_cols, text_cols = identify_column_types(df_filtered)
         
+        st.write(f"🔍 DEBUG - Columnas enteras detectadas: {list(integer_cols)}")
+        st.write(f"🔍 DEBUG - pack_id está en integer_cols: {'pack_id' in integer_cols}")
+        
         # Limpiar datos por tipo
         for col in df_filtered.columns:
-            if col in integer_cols:
+            if col == 'pack_id':
+                # FORZAR CONVERSIÓN ESPECÍFICA PARA pack_id
+                st.write(f"🔧 Limpiando pack_id específicamente...")
+                original_sample = df_filtered[col].head(3).tolist()
+                st.write(f"  Valores originales: {original_sample}")
+                
+                # Convertir pack_id de float a int
+                df_filtered[col] = df_filtered[col].apply(lambda x: int(x) if pd.notna(x) and isinstance(x, (int, float)) and x == int(x) else None)
+                
+                cleaned_sample = df_filtered[col].head(3).tolist()
+                st.write(f"  Valores limpiados: {cleaned_sample}")
+                
+            elif col in integer_cols:
                 # Limpiar como enteros
                 df_filtered[col] = df_filtered[col].apply(lambda x: clean_numeric_value(x, 'integer'))
             elif col in float_cols:
@@ -727,6 +772,15 @@ def insert_to_supabase(df):
             else:
                 # Mantener como texto (incluyendo todas las columnas CXP)
                 df_filtered[col] = df_filtered[col].apply(lambda x: str(x) if pd.notna(x) and x is not None and str(x).strip() != '' else None)
+        
+        # Verificación específica para pack_id después de limpieza
+        if 'pack_id' in df_filtered.columns:
+            pack_id_types = df_filtered['pack_id'].apply(type).value_counts()
+            st.write(f"🔍 DEBUG - Tipos de pack_id después de limpieza: {pack_id_types.to_dict()}")
+            pack_id_sample = df_filtered['pack_id'].head(5).tolist()
+            st.write(f"🔍 DEBUG - Muestra de pack_id limpiado: {pack_id_sample}")
+        
+        st.success("✅ Limpieza de tipos completada")
         
         # Preparar datos para inserción
         records = df_filtered.to_dict('records')
@@ -775,6 +829,13 @@ def insert_to_supabase(df):
             clean_records = unique_records
             st.info(f"✅ Registros únicos para insertar: {len(clean_records)}")
         
+        # DEBUG: Verificar tipos de los primeros registros
+        if clean_records:
+            st.write("🔍 DEBUG - Primer registro después de limpieza:")
+            first_record = clean_records[0]
+            for key, value in list(first_record.items())[:8]:  # Mostrar primeros 8 campos
+                st.write(f"  {key}: {value} (tipo: {type(value)})")
+        
         # Insertar en lotes más pequeños para mejor debug
         batch_size = 20  # Reducido para mejor debugging
         total_inserted = 0
@@ -805,7 +866,7 @@ def insert_to_supabase(df):
                 # Mostrar el primer registro del lote para debug
                 if batch:
                     st.write("🔍 Primer registro del lote con error:")
-                    for key, value in list(batch[0].items())[:5]:  # Solo primeros 5 campos
+                    for key, value in list(batch[0].items())[:8]:  # Solo primeros 8 campos
                         st.write(f"  {key}: {value} (tipo: {type(value)})")
                 
                 continue
