@@ -3,10 +3,11 @@ import pandas as pd
 import numpy as np
 from supabase import create_client, Client
 import os
-from datetime import datetime
+from datetime import datetime, date
 import io
 import time
 import re
+import traceback  # Para mejor debugging
 
 # Configuración de la página
 st.set_page_config(
@@ -33,6 +34,118 @@ try:
     st.sidebar.success("✅ Conectado a Supabase")
 except Exception as e:
     st.sidebar.error(f"❌ Error de conexión: {str(e)}")
+
+# FUNCIONES DE LIMPIEZA PARA BASE DE DATOS
+
+def clean_numeric_value(value, target_type='float'):
+    """Limpia valores numéricos problemáticos"""
+    if pd.isna(value) or value is None:
+        return None
+    
+    # Si ya es None, devolverlo
+    if value is None:
+        return None
+    
+    # Convertir a string para limpiar
+    str_val = str(value).strip()
+    
+    # Si está vacío, devolver None
+    if not str_val or str_val.lower() in ['nan', 'none', '']:
+        return None
+    
+    try:
+        # Remover caracteres no numéricos excepto punto y signo negativo
+        cleaned = ''.join(c for c in str_val if c.isdigit() or c in '.-')
+        
+        if not cleaned or cleaned in ['.', '-', '-.']:
+            return None
+        
+        # Convertir a float primero
+        float_val = float(cleaned)
+        
+        # Si target_type es integer, convertir y validar
+        if target_type == 'integer':
+            # Si el valor es exactamente .0, convertir a entero
+            if float_val == int(float_val):
+                return int(float_val)
+            else:
+                # Si tiene decimales reales, redondear
+                return round(float_val)
+        else:
+            return float_val
+            
+    except (ValueError, TypeError):
+        return None
+
+def clean_datetime_value(value):
+    """Limpia y convierte valores de fecha/hora para la BD"""
+    if pd.isna(value) or value is None:
+        return None
+    
+    # Si ya es string, devolverlo
+    if isinstance(value, str):
+        return value if value.strip() else None
+    
+    # Si es datetime, convertir a string ISO
+    if isinstance(value, (datetime, date)):
+        return value.isoformat() if hasattr(value, 'isoformat') else str(value)
+    
+    # Si es pandas Timestamp
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    
+    # Si es numpy datetime
+    if isinstance(value, np.datetime64):
+        return pd.Timestamp(value).isoformat()
+    
+    # Fallback: convertir a string
+    return str(value) if value else None
+
+def identify_column_types(df):
+    """Identifica qué tipo de datos debería tener cada columna según la estructura de la BD"""
+    
+    # Definir columnas que deben ser enteros (sin decimales)
+    integer_columns = {
+        'system_number', 'serial_number', 'quantity', 'pack_id',
+        'street_number', 'client_doc_id', 'numero_de_documento',
+        'logistics_order_number', 'logistics_reference', 'logistics_guide_number'
+    }
+    
+    # Definir columnas que deben ser float (con decimales)
+    float_columns = {
+        'unit_price', 'declare_value', 'meli_fee', 'iva', 'ica', 'fuente',
+        'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount',
+        'logistic_weight_lbs', 'logistics_fob', 'logistics_weight', 'logistics_length',
+        'logistics_width', 'logistics_height', 'logistics_insurance', 'logistics_logistics',
+        'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
+        'logistics_saving', 'logistics_total', 'aditionals_unitprice', 'aditionals_total'
+    }
+    
+    # Definir columnas que deben ser datetime/string
+    datetime_columns = {
+        'date_created', 'refunded_date', 'cxp_date'
+    }
+    
+    # Definir columnas que deben mantenerse como texto (especialmente CXP)
+    text_columns = {
+        'order_id', 'asin', 'client_first_name', 'client_last_name', 'account_name',
+        'title', 'logistic_type', 'address_line', 'street_name', 'city', 'state',
+        'country', 'receiver_phone', 'amz_order_id', 'prealert_id', 'etiqueta_envio',
+        'order_status_meli', 'nombre_del_tercero', 'direccion', 'apelido_del_tercero',
+        'estado', 'razon_social', 'ciudad', 'digital_verification', 'tipo', 'telefono',
+        'giro', 'correo', 'asignacion'
+    }
+    
+    # Todas las columnas CXP deben mantenerse como texto para preservar formato
+    for col in df.columns:
+        if col.startswith('cxp_'):
+            text_columns.add(col)
+        elif col.startswith('logistics_') and 'description' in col.lower():
+            text_columns.add(col)
+        elif col.startswith('aditionals_') and col.endswith('_description'):
+            text_columns.add(col)
+    
+    return integer_columns, float_columns, datetime_columns, text_columns
 
 # NUEVAS FUNCIONES DE FORMATO Y LIMPIEZA
 
@@ -560,7 +673,7 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
     st.success(f"🎉 Consolidación completada: {len(consolidated_df)} registros finales")
     return consolidated_df
 
-# Función para insertar datos en Supabase
+# Función para insertar datos en Supabase - VERSIÓN CORREGIDA
 def insert_to_supabase(df):
     """Inserta los datos consolidados en Supabase con validación de duplicados"""
     try:
@@ -570,7 +683,6 @@ def insert_to_supabase(df):
         df_mapped = map_column_names(df)
         
         # Filtrar solo las columnas que existen en la tabla de la base de datos
-        # Estas son las columnas que definimos en la tabla SQL
         db_columns = [
             'system_number', 'serial_number', 'order_id', 'pack_id', 'asin',
             'client_first_name', 'client_last_name', 'client_doc_id', 'account_name',
@@ -595,60 +707,107 @@ def insert_to_supabase(df):
         
         st.info(f"📊 Preparando {len(df_filtered)} registros con {len(df_filtered.columns)} columnas")
         
+        # NUEVA LÓGICA DE LIMPIEZA DE DATOS
+        st.info("🧹 Limpiando tipos de datos...")
+        
+        # Identificar tipos de columnas
+        integer_cols, float_cols, datetime_cols, text_cols = identify_column_types(df_filtered)
+        
+        # Limpiar datos por tipo
+        for col in df_filtered.columns:
+            if col in integer_cols:
+                # Limpiar como enteros
+                df_filtered[col] = df_filtered[col].apply(lambda x: clean_numeric_value(x, 'integer'))
+            elif col in float_cols:
+                # Limpiar como flotantes
+                df_filtered[col] = df_filtered[col].apply(lambda x: clean_numeric_value(x, 'float'))
+            elif col in datetime_cols:
+                # Limpiar como fechas
+                df_filtered[col] = df_filtered[col].apply(clean_datetime_value)
+            else:
+                # Mantener como texto (incluyendo todas las columnas CXP)
+                df_filtered[col] = df_filtered[col].apply(lambda x: str(x) if pd.notna(x) and x is not None and str(x).strip() != '' else None)
+        
         # Preparar datos para inserción
         records = df_filtered.to_dict('records')
         
-        # Limpiar valores NaN y convertir tipos de datos
-        for record in records:
+        # Validación final de registros
+        st.info("🔍 Validación final de registros...")
+        clean_records = []
+        
+        for i, record in enumerate(records):
+            clean_record = {}
+            has_errors = False
+            
             for key, value in record.items():
-                # Preservar columnas CXP como texto (mantener formato original)
-                if key.startswith('cxp_') and isinstance(value, str):
-                    record[key] = value  # Mantener como texto
-                elif pd.isna(value):
-                    record[key] = None
-                elif isinstance(value, (np.integer, np.floating)):
-                    if np.isfinite(value):
-                        record[key] = float(value) if isinstance(value, np.floating) else int(value)
+                try:
+                    # Si el valor es None o NaN, mantenerlo como None
+                    if pd.isna(value) or value is None:
+                        clean_record[key] = None
+                    elif isinstance(value, str) and value.strip() == '':
+                        clean_record[key] = None
                     else:
-                        record[key] = None
+                        clean_record[key] = value
+                        
+                except Exception as e:
+                    st.write(f"    Error en registro {i}, columna {key}: {e}")
+                    clean_record[key] = None
+                    has_errors = True
+            
+            if not has_errors:
+                clean_records.append(clean_record)
+            else:
+                st.write(f"    Registro {i} tiene errores, saltando...")
+        
+        st.success(f"✅ {len(clean_records)} registros listos para inserción")
         
         # Verificación adicional de duplicados por order_id
-        order_ids = [r.get('order_id') for r in records if r.get('order_id')]
+        order_ids = [r.get('order_id') for r in clean_records if r.get('order_id')]
         if len(set(order_ids)) != len(order_ids):
             st.warning(f"⚠️ Detectados duplicados en order_id durante inserción. Removiendo duplicados...")
             seen_order_ids = set()
             unique_records = []
-            for record in records:
+            for record in clean_records:
                 order_id = record.get('order_id')
                 if order_id not in seen_order_ids:
                     seen_order_ids.add(order_id)
                     unique_records.append(record)
-            records = unique_records
-            st.info(f"✅ Registros únicos para insertar: {len(records)}")
+            clean_records = unique_records
+            st.info(f"✅ Registros únicos para insertar: {len(clean_records)}")
         
-        # Insertar en lotes
-        batch_size = 50
+        # Insertar en lotes más pequeños para mejor debug
+        batch_size = 20  # Reducido para mejor debugging
         total_inserted = 0
         errors = []
         
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
+        for i in range(0, len(clean_records), batch_size):
+            batch = clean_records[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            
+            status_text.text(f"📦 Procesando lote {batch_num}: {len(batch)} registros")
             
             try:
+                # Intentar insertar el lote
                 result = supabase.table('consolidated_orders').insert(batch).execute()
                 total_inserted += len(batch)
                 
-                progress = min(1.0, (i + batch_size) / len(records))
+                progress = min(1.0, (i + batch_size) / len(clean_records))
                 progress_bar.progress(progress)
-                status_text.text(f"Insertando: {total_inserted}/{len(records)} registros")
                 
             except Exception as batch_error:
-                error_msg = f"Error en lote {i//batch_size + 1}: {str(batch_error)}"
+                error_msg = f"Error en lote {batch_num}: {str(batch_error)}"
                 st.error(error_msg)
                 errors.append(error_msg)
+                
+                # Mostrar el primer registro del lote para debug
+                if batch:
+                    st.write("🔍 Primer registro del lote con error:")
+                    for key, value in list(batch[0].items())[:5]:  # Solo primeros 5 campos
+                        st.write(f"  {key}: {value} (tipo: {type(value)})")
+                
                 continue
         
         progress_bar.progress(1.0)
@@ -658,7 +817,7 @@ def insert_to_supabase(df):
         try:
             log_data = {
                 'file_type': 'consolidated',
-                'records_processed': len(records),
+                'records_processed': len(clean_records),
                 'records_matched': total_inserted,
                 'status': 'success' if not errors else 'partial_success',
                 'error_message': '; '.join(errors) if errors else None
@@ -671,6 +830,8 @@ def insert_to_supabase(df):
         
     except Exception as e:
         st.error(f"Error general: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return 0
 
 # Interfaz principal
