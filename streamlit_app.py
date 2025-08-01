@@ -302,10 +302,7 @@ def apply_display_formatting(df):
         'logistics_fob', 'logistics_weight', 'logistics_length', 'logistics_width', 
         'logistics_height', 'logistics_insurance', 'logistics_logistics',
         'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
-        'logistics_saving', 'logistics_total',
-        # Agregando columnas CXP con formato de decimales como logistics_total
-        'cxp_co_aereo', 'cxp_arancel', 'cxp_iva', 'cxp_handling', 
-        'cxp_dest_delivery', 'cxp_amt_due', 'cxp_goods_value'
+        'logistics_saving', 'logistics_total'
     ]
     
     for col in currency_with_decimals_columns:
@@ -479,20 +476,14 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
             'Amt. Due': 'Amt. Due',
             'Goods Value': 'Goods Value',
             
-            # Formato archivo grande -> formato estándar (con espacios extra)
+            # Formato archivo grande -> formato estándar
             'ot_number': 'OT Number',
             'date': 'Date',
             'consignee': 'Consignee', 
             'co_aereo': 'CO Aereo',
-            ' co_aereo ': 'CO Aereo',  # Con espacios
             'arancel': 'Arancel',
-            ' arancel ': 'Arancel',   # Con espacios
             'iva': 'IVA',
-            ' iva ': 'IVA',           # Con espacios
-            'dest_delivery': 'Dest. Delivery',
-            ' dest_delivery ': 'Dest. Delivery',  # Con espacios
-            ' Amt. Due ': 'Amt. Due', # Con espacios
-            ' Goods Value ': 'Goods Value'  # Con espacios
+            'dest_delivery': 'Dest. Delivery'
         }
         
         # Aplicar mapeo de columnas
