@@ -607,8 +607,8 @@ def insert_to_supabase(df):
         # Preparar datos para inserción
         records = df_filtered.to_dict('records')
         
-        # LIMPIEZA AGRESIVA: Eliminar todos los valores problemáticos
-        st.info("🔥 Aplicando limpieza agresiva de datos...")
+        # LIMPIEZA AGRESIVA CORREGIDA: Eliminar todos los valores problemáticos
+        st.info("🔥 Aplicando limpieza agresiva de datos corregida...")
         
         # Columnas que son INTEGER en la base de datos
         integer_columns = ['system_number', 'quantity', 'iva', 'ica']
@@ -642,11 +642,31 @@ def insert_to_supabase(df):
                     except:
                         record[key] = 0
                 else:
-                    # LIMPIEZA AGRESIVA para todas las demás columnas
+                    # LIMPIEZA AGRESIVA CORREGIDA para todas las demás columnas
                     str_value = str(value).strip()
                     
-                    # Eliminar valores basura
-                    if str_value in garbage_values:
+                    # NUEVO: Corregir encoding ANTES de otros procesamientos
+                    str_value = fix_encoding(str_value)
+                    
+                    # NUEVO: Manejar notación científica en order_id
+                    if key == 'order_id' and ('E+' in str_value or 'e+' in str_value):
+                        try:
+                            # Convertir notación científica a número entero
+                            scientific_num = float(str_value)
+                            str_value = str(int(scientific_num))
+                        except:
+                            pass  # Si falla, mantener original
+                    
+                    # EXCEPCIÓN ESPECIAL: No limpiar agresivamente la columna title
+                    elif key == 'title':
+                        # Solo aplicar encoding fix y mantener el contenido
+                        if str_value in ['####', '', 'nan', 'NaN', 'NULL']:
+                            record[key] = None
+                        else:
+                            record[key] = str_value
+                    
+                    # Eliminar valores basura para otras columnas
+                    elif str_value in garbage_values:
                         record[key] = None
                     # Limpiar texto en columnas numéricas
                     elif 'giro' in str_value.lower() or 'actividades' in str_value.lower() or 'hotel' in str_value.lower():
@@ -656,9 +676,20 @@ def insert_to_supabase(df):
                     # Limpiar símbolos extraños
                     elif '$-' in str_value or '$$' in str_value:
                         record[key] = None
+                    # NUEVO: Limpiar campos que solo tienen ####
+                    elif str_value == '####' or str_value.strip() == '':
+                        record[key] = None
                     # Strings muy largos que no son números
                     elif len(str_value) > 50 and not str_value.replace('.', '').replace('-', '').isdigit():
                         record[key] = None
+                    # NUEVO: Limpiar números que parecen IDs pero con decimales
+                    elif key in ['serial_number', 'system_number'] and '.' in str_value:
+                        # Para serial_number y system_number, quitar decimales
+                        try:
+                            clean_num = str(int(float(str_value)))
+                            record[key] = clean_num
+                        except:
+                            record[key] = str_value
                     else:
                         record[key] = str_value if str_value else None
         
@@ -766,6 +797,8 @@ def main():
         st.markdown("• **Fechas** formato estándar")
         st.markdown("• **Acentos** corregidos automáticamente")
         st.markdown("• **Duplicados** eliminados")
+        st.markdown("• **Order ID** formato científico corregido")
+        st.markdown("• **Títulos** preservados completamente")
     
     # Área principal
     col1, col2 = st.columns([2, 1])
@@ -822,9 +855,9 @@ def main():
             st.warning("⚠️ Archivo Drapify requerido")
     
     # Botón de procesamiento
-    if st.button("🚀 Procesar con Formatos Profesionales", disabled=not drapify_file, type="primary"):
+    if st.button("🚀 Procesar con Todas las Correcciones", disabled=not drapify_file, type="primary"):
         
-        with st.spinner("Procesando archivos con formatos profesionales..."):
+        with st.spinner("Procesando archivos con todas las correcciones aplicadas..."):
             try:
                 # Limpiar datos existentes si se seleccionó
                 if clear_data and has_existing_data:
@@ -877,7 +910,7 @@ def main():
                 )
                 
                 # Mostrar preview de los datos
-                st.header("👀 Preview de Datos Consolidados con Formatos")
+                st.header("👀 Preview de Datos Consolidados con Todas las Correcciones")
                 st.dataframe(consolidated_df.head(10), use_container_width=True)
                 
                 # Mostrar estadísticas detalladas
@@ -916,10 +949,16 @@ def main():
                     asignacion_counts = consolidated_df['Asignacion'].value_counts().head(10)
                     st.bar_chart(asignacion_counts)
                 
+                # Mostrar análisis de títulos
+                if 'title' in consolidated_df.columns:
+                    st.subheader("📝 Análisis de Títulos")
+                    titles_with_data = consolidated_df['title'].notna().sum()
+                    st.metric("Títulos con datos", f"{titles_with_data:,}")
+                
                 # Guardar automáticamente en base de datos
                 st.header("💾 Guardando en Base de Datos")
                 
-                with st.spinner("Insertando datos con formatos profesionales en Supabase..."):
+                with st.spinner("Insertando datos corregidos en Supabase..."):
                     inserted_count = insert_to_supabase(consolidated_df)
                     
                     if inserted_count > 0:
@@ -945,9 +984,9 @@ def main():
                 csv_data = csv_buffer.getvalue()
                 
                 st.download_button(
-                    label="📥 Descargar CSV con Formatos Profesionales",
+                    label="📥 Descargar CSV con Todas las Correcciones",
                     data=csv_data,
-                    file_name=f"consolidated_orders_formatted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"consolidated_orders_corrected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     type="secondary"
                 )
