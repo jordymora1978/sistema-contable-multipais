@@ -607,11 +607,21 @@ def insert_to_supabase(df):
         # Preparar datos para inserción
         records = df_filtered.to_dict('records')
         
-        # SOLUCIÓN ESPECÍFICA: Identificar columnas INTEGER y convertir correctamente
-        st.info("🔧 Conversión específica por tipo de columna...")
+        # LIMPIEZA AGRESIVA: Eliminar todos los valores problemáticos
+        st.info("🔧 Aplicando limpieza agresiva de datos...")
         
-        # Columnas que son INTEGER en la base de datos (según el documento)
+        # Columnas que son INTEGER en la base de datos
         integer_columns = ['system_number', 'quantity', 'iva', 'ica']
+        
+        # Valores basura que deben ser eliminados (convertidos a None)
+        garbage_values = [
+            "", " ", "  ", "   ",  # Espacios vacíos
+            "$-", " $- ", " $-", "$- ",  # Símbolos monetarios basura
+            "XXXXXXXXXX", "xxxxxxxxxx",  # Placeholders
+            "nan", "NaN", "NULL", "null",  # Valores nulos como texto
+            "-", "--", "---",  # Guiones vacíos
+            "N/A", "n/a", "NA"  # No aplica
+        ]
         
         for record in records:
             for key, value in record.items():
@@ -622,17 +632,28 @@ def insert_to_supabase(df):
                 elif key in integer_columns:
                     # MANEJO ESPECÍFICO para columnas INTEGER
                     try:
-                        if str(value) == "0.0" or str(value) == "":
+                        str_val = str(value).strip()
+                        if str_val in garbage_values or str_val == "0.0":
                             record[key] = 0
-                        elif str(value).endswith('.0'):
+                        elif str_val.endswith('.0'):
                             record[key] = int(float(value))
                         else:
                             record[key] = int(float(value))
                     except:
                         record[key] = 0  # Valor por defecto seguro para INTEGER
                 else:
-                    # Para todas las demás columnas (TEXT, NUMERIC): convertir a string
-                    record[key] = str(value)
+                    # LIMPIEZA AGRESIVA para todas las demás columnas
+                    str_value = str(value).strip()
+                    
+                    # Eliminar valores basura completamente
+                    if str_value in garbage_values:
+                        record[key] = None
+                    # Limpiar texto que NO debe estar en columnas numéricas
+                    elif any(word in str_value.lower() for word in ['giro ', 'actividades', 'hotel', 'ventas', 'arequipa']):
+                        # Si contiene texto descriptivo, probablemente es basura en columna numérica
+                        record[key] = None
+                    # Limpiar símbolos extraños
+                    elif any(symbol in str_value for symbol in ['$-', ' 
         
         # Verificación adicional de duplicados por order_id
         order_ids = [r.get('order_id') for r in records if r.get('order_id')]
@@ -670,6 +691,424 @@ def insert_to_supabase(df):
             except Exception as batch_error:
                 error_msg = f"Error en lote {i//batch_size + 1}: {str(batch_error)}"
                 st.error(error_msg)
+                
+                # DIAGNÓSTICO: Mostrar el primer registro del lote con error
+                st.write("🔍 Primer registro del lote con error:")
+                if batch:
+                    sample = batch[0]
+                    for key, value in sample.items():
+                        # Resaltar valores problemáticos
+                        if str(value) == "0.0":
+                            st.error(f"❌ {key}: {value} (tipo: {type(value)})")
+                        elif isinstance(value, float) and str(value).endswith('.0'):
+                            st.warning(f"⚠️ {key}: {value} (tipo: {type(value)}) - POSIBLE PROBLEMA")
+                        else:
+                            st.write(f"{key}: {value} (tipo: {type(value)})")
+                
+                errors.append(error_msg)
+                continue
+        
+        progress_bar.progress(1.0)
+        status_text.text(f"✅ Completado: {total_inserted} registros insertados")
+        
+        # Log del procesamiento
+        try:
+            log_data = {
+                'file_type': 'consolidated',
+                'records_processed': len(records),
+                'records_matched': total_inserted,
+                'status': 'success' if not errors else 'partial_success',
+                'error_message': '; '.join(errors) if errors else None
+            }
+            supabase.table('processing_logs').insert(log_data).execute()
+        except Exception as log_error:
+            st.warning(f"Error logging process: {str(log_error)}")
+        
+        return total_inserted
+        
+    except Exception as e:
+        st.error(f"Error general: {str(e)}")
+        return 0
+
+# Interfaz principal
+def main():
+    st.title("📦 Consolidador de Órdenes")
+    st.markdown("### Procesa y consolida archivos con formatos profesionales")
+    
+    # Sidebar con información
+    with st.sidebar:
+        st.header("⚙️ Configuración")
+        
+        # Verificar si hay datos existentes
+        has_existing_data = check_existing_data()
+        
+        if has_existing_data:
+            st.warning("⚠️ Hay datos existentes en la BD")
+            clear_data = st.checkbox(
+                "🗑️ Limpiar datos existentes antes de procesar",
+                value=True,
+                help="Recomendado para evitar duplicados y aplicar nuevos formatos"
+            )
+        else:
+            st.success("✅ Base de datos limpia")
+            clear_data = False
+        
+        st.info("💾 Los datos se guardarán automáticamente en la base de datos")
+        
+        st.markdown("---")
+        st.markdown("**📋 Procesamiento mejorado:**")
+        st.markdown("1. 📋 **Drapify** (base - obligatorio)")
+        st.markdown("2. 🚚 **Logistics** (opcional)")
+        st.markdown("3. ➕ **Aditionals** (opcional)")
+        st.markdown("4. 🏷️ **Calcular Asignacion**")
+        st.markdown("5. 💰 **CXP** (opcional)")
+        st.markdown("6. 🎨 **Aplicar formatos profesionales**")
+        st.markdown("7. 🔍 **Validar duplicados**")
+        st.markdown("8. 💾 **Guardar en Base de Datos**")
+        
+        st.markdown("---")
+        st.markdown("**🎨 Formatos aplicados:**")
+        st.markdown("• **Currency** sin decimales")
+        st.markdown("• **Currency** con decimales")
+        st.markdown("• **Fechas** formato estándar")
+        st.markdown("• **Acentos** corregidos automáticamente")
+        st.markdown("• **Duplicados** eliminados")
+    
+    # Área principal
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.header("📁 Subir Archivos")
+        
+        drapify_file = st.file_uploader(
+            "1. Archivo Drapify (OBLIGATORIO - Base de datos)",
+            type=['xlsx', 'xls', 'csv'],
+            key="drapify",
+            help="Archivo base con todas las órdenes"
+        )
+        
+        logistics_file = st.file_uploader(
+            "2. Archivo Logistics (opcional)",
+            type=['xlsx', 'xls', 'csv'],
+            key="logistics",
+            help="Costos de Anicam para envíos internacionales"
+        )
+        
+        aditionals_file = st.file_uploader(
+            "3. Archivo Aditionals (opcional)",
+            type=['xlsx', 'xls', 'csv'],
+            key="aditionals",
+            help="Costos adicionales de Anicam"
+        )
+        
+        cxp_file = st.file_uploader(
+            "4. Archivo CXP (opcional)",
+            type=['xlsx', 'xls', 'csv'],
+            key="cxp",
+            help="Costos de Chilexpress"
+        )
+    
+    with col2:
+        st.header("📊 Estado")
+        
+        files_status = {
+            "Drapify": "✅" if drapify_file else "❌",
+            "Logistics": "✅" if logistics_file else "⚪",
+            "Aditionals": "✅" if aditionals_file else "⚪",
+            "CXP": "✅" if cxp_file else "⚪"
+        }
+        
+        for file_type, status in files_status.items():
+            st.write(f"{status} {file_type}")
+        
+        st.markdown("---")
+        
+        if drapify_file:
+            st.success("✅ Listo para procesar")
+        else:
+            st.warning("⚠️ Archivo Drapify requerido")
+    
+    # Botón de procesamiento
+    if st.button("🚀 Procesar con Formatos Profesionales", disabled=not drapify_file, type="primary"):
+        
+        with st.spinner("Procesando archivos con formatos profesionales..."):
+            try:
+                # Limpiar datos existentes si se seleccionó
+                if clear_data and has_existing_data:
+                    st.info("🗑️ Limpiando datos existentes...")
+                    if clear_existing_data():
+                        st.success("✅ Datos existentes eliminados")
+                    else:
+                        st.warning("⚠️ No se pudieron eliminar completamente los datos existentes")
+                
+                # Leer archivo Drapify
+                if drapify_file.name.endswith('.csv'):
+                    drapify_df = pd.read_csv(drapify_file)
+                else:
+                    drapify_df = pd.read_excel(drapify_file)
+                
+                st.success(f"✅ Drapify cargado: {len(drapify_df)} registros")
+                
+                # Mostrar columnas encontradas en Drapify
+                with st.expander("🔍 Columnas encontradas en Drapify"):
+                    st.write(list(drapify_df.columns))
+                
+                # Leer archivos opcionales
+                logistics_df = None
+                if logistics_file:
+                    if logistics_file.name.endswith('.csv'):
+                        logistics_df = pd.read_csv(logistics_file)
+                    else:
+                        logistics_df = pd.read_excel(logistics_file)
+                    st.success(f"✅ Logistics cargado: {len(logistics_df)} registros")
+                
+                aditionals_df = None
+                if aditionals_file:
+                    if aditionals_file.name.endswith('.csv'):
+                        aditionals_df = pd.read_csv(aditionals_file)
+                    else:
+                        aditionals_df = pd.read_excel(aditionals_file)
+                    st.success(f"✅ Aditionals cargado: {len(aditionals_df)} registros")
+                
+                cxp_df = None
+                if cxp_file:
+                    if cxp_file.name.endswith('.csv'):
+                        cxp_df = pd.read_csv(cxp_file)
+                    else:
+                        cxp_df = pd.read_excel(cxp_file)
+                    st.success(f"✅ CXP cargado: {len(cxp_df)} registros")
+                
+                # Procesar consolidación usando las reglas específicas
+                consolidated_df = process_files_according_to_rules(
+                    drapify_df, logistics_df, aditionals_df, cxp_df
+                )
+                
+                # Mostrar preview de los datos
+                st.header("👀 Preview de Datos Consolidados con Formatos")
+                st.dataframe(consolidated_df.head(10), use_container_width=True)
+                
+                # Mostrar estadísticas detalladas
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Registros", len(consolidated_df))
+                
+                with col2:
+                    logistics_matched = 0
+                    if any(col.startswith('logistics_') for col in consolidated_df.columns):
+                        logistics_cols = [col for col in consolidated_df.columns if col.startswith('logistics_')]
+                        if logistics_cols:
+                            logistics_matched = consolidated_df[logistics_cols[0]].notna().sum()
+                    st.metric("Logistics Matched", logistics_matched)
+                
+                with col3:
+                    aditionals_matched = 0
+                    if any(col.startswith('aditionals_') for col in consolidated_df.columns):
+                        aditionals_cols = [col for col in consolidated_df.columns if col.startswith('aditionals_')]
+                        if aditionals_cols:
+                            aditionals_matched = consolidated_df[aditionals_cols[0]].notna().sum()
+                    st.metric("Aditionals Matched", aditionals_matched)
+                
+                with col4:
+                    cxp_matched = 0
+                    if any(col.startswith('cxp_') for col in consolidated_df.columns):
+                        cxp_cols = [col for col in consolidated_df.columns if col.startswith('cxp_')]
+                        if cxp_cols:
+                            cxp_matched = consolidated_df[cxp_cols[0]].notna().sum()
+                    st.metric("CXP Matched", cxp_matched)
+                
+                # Mostrar información de la columna Asignacion
+                if 'Asignacion' in consolidated_df.columns:
+                    st.subheader("🏷️ Análisis de Asignaciones")
+                    asignacion_counts = consolidated_df['Asignacion'].value_counts().head(10)
+                    st.bar_chart(asignacion_counts)
+                
+                # Guardar automáticamente en base de datos
+                st.header("💾 Guardando en Base de Datos")
+                
+                with st.spinner("Insertando datos con formatos profesionales en Supabase..."):
+                    inserted_count = insert_to_supabase(consolidated_df)
+                    
+                    if inserted_count > 0:
+                        st.success(f"🎉 ¡Procesamiento completado exitosamente!")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.success(f"✅ {len(consolidated_df)} registros procesados")
+                        with col2:
+                            st.success(f"✅ {inserted_count} registros guardados en BD")
+                        st.balloons()
+                    else:
+                        st.error("❌ Error guardando en la base de datos")
+                        st.warning("Los datos fueron procesados correctamente pero no se pudieron guardar")
+                
+                # Opción de descarga con formatos de visualización
+                st.header("💾 Descargar Resultado")
+                
+                # Aplicar formatos de visualización solo para descarga
+                display_df = apply_display_formatting(consolidated_df)
+                
+                csv_buffer = io.StringIO()
+                display_df.to_csv(csv_buffer, index=False)
+                csv_data = csv_buffer.getvalue()
+                
+                st.download_button(
+                    label="📥 Descargar CSV con Formatos Profesionales",
+                    data=csv_data,
+                    file_name=f"consolidated_orders_formatted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    type="secondary"
+                )
+                
+            except Exception as e:
+                st.error(f"❌ Error procesando archivos: {str(e)}")
+                st.exception(e)
+    
+    # Sección de consultas
+    st.markdown("---")
+    st.header("🔍 Consultar Datos Existentes")
+    
+    query_col1, query_col2 = st.columns(2)
+    
+    with query_col1:
+        if st.button("📊 Ver Estadísticas Generales"):
+            try:
+                result = supabase.table('consolidated_orders').select('account_name').execute()
+                
+                if result.data:
+                    df = pd.DataFrame(result.data)
+                    if 'account_name' in df.columns:
+                        st.subheader("Registros por Account Name")
+                        account_counts = df['account_name'].value_counts()
+                        st.bar_chart(account_counts)
+                        st.dataframe(account_counts.reset_index())
+                    else:
+                        st.info("Datos encontrados pero sin columna account_name")
+                else:
+                    st.info("No hay datos en la base de datos")
+                    
+            except Exception as e:
+                st.error(f"Error consultando estadísticas: {str(e)}")
+    
+    with query_col2:
+        if st.button("📋 Ver Últimos Registros"):
+            try:
+                result = supabase.table('consolidated_orders').select('*').order('id', desc=True).limit(10).execute()
+                
+                if result.data:
+                    recent_df = pd.DataFrame(result.data)
+                    st.subheader("Últimos 10 Registros")
+                    st.dataframe(recent_df, use_container_width=True)
+                else:
+                    st.info("No hay datos en la base de datos")
+                    
+            except Exception as e:
+                st.error(f"Error consultando registros: {str(e)}")
+    
+    # Búsqueda específica
+    st.subheader("🔎 Búsqueda Específica")
+    
+    search_col1, search_col2, search_col3 = st.columns(3)
+    
+    with search_col1:
+        search_order_id = st.text_input("Buscar por Order ID")
+    
+    with search_col2:
+        search_prealert_id = st.text_input("Buscar por Prealert ID")
+    
+    with search_col3:
+        search_account = st.selectbox(
+            "Filtrar por Account",
+            ["Todos", "1-TODOENCARGO-CO", "2-MEGATIENDA SPA", "3-VEENDELO", 
+             "4-MEGA TIENDAS PERUANAS", "5-DETODOPARATODOS", "6-COMPRAFACIL", 
+             "7-COMPRA-YA", "8-FABORCARGO"]
+        )
+    
+    if st.button("🔍 Buscar"):
+        try:
+            query = supabase.table('consolidated_orders').select('*')
+            
+            if search_order_id:
+                query = query.eq('order_id', search_order_id)
+            
+            if search_prealert_id:
+                query = query.eq('prealert_id', search_prealert_id)
+            
+            if search_account != "Todos":
+                query = query.eq('account_name', search_account)
+            
+            result = query.execute()
+            
+            if result.data:
+                search_df = pd.DataFrame(result.data)
+                st.success(f"✅ Encontrados {len(search_df)} registros")
+                st.dataframe(search_df, use_container_width=True)
+            else:
+                st.warning("No se encontraron registros con los criterios especificados")
+                
+        except Exception as e:
+            st.error(f"Error en la búsqueda: {str(e)}")
+
+if __name__ == "__main__":
+    main(), '$ ', '$']):
+                        record[key] = None
+                    # Limpiar valores que son obviamente incorrectos
+                    elif len(str_value) > 50 and not str_value.replace('.', '').replace('-', '').isdigit():
+                        # Strings muy largos que no son números
+                        record[key] = None
+                    else:
+                        # Valor parece válido, mantener como string
+                        record[key] = str_value if str_value else None
+        
+        # Verificación adicional de duplicados por order_id
+        order_ids = [r.get('order_id') for r in records if r.get('order_id')]
+        if len(set(order_ids)) != len(order_ids):
+            st.warning(f"⚠️ Detectados duplicados en order_id durante inserción. Removiendo duplicados...")
+            seen_order_ids = set()
+            unique_records = []
+            for record in records:
+                order_id = record.get('order_id')
+                if order_id not in seen_order_ids:
+                    seen_order_ids.add(order_id)
+                    unique_records.append(record)
+            records = unique_records
+            st.info(f"✅ Registros únicos para insertar: {len(records)}")
+        
+        # Insertar en lotes
+        batch_size = 50
+        total_inserted = 0
+        errors = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i in range(0, len(records), batch_size):
+            batch = records[i:i + batch_size]
+            
+            try:
+                result = supabase.table('consolidated_orders').insert(batch).execute()
+                total_inserted += len(batch)
+                
+                progress = min(1.0, (i + batch_size) / len(records))
+                progress_bar.progress(progress)
+                status_text.text(f"Insertando: {total_inserted}/{len(records)} registros")
+                
+            except Exception as batch_error:
+                error_msg = f"Error en lote {i//batch_size + 1}: {str(batch_error)}"
+                st.error(error_msg)
+                
+                # DIAGNÓSTICO: Mostrar el primer registro del lote con error
+                st.write("🔍 Primer registro del lote con error:")
+                if batch:
+                    sample = batch[0]
+                    for key, value in sample.items():
+                        # Resaltar valores problemáticos
+                        if str(value) == "0.0":
+                            st.error(f"❌ {key}: {value} (tipo: {type(value)})")
+                        elif isinstance(value, float) and str(value).endswith('.0'):
+                            st.warning(f"⚠️ {key}: {value} (tipo: {type(value)}) - POSIBLE PROBLEMA")
+                        else:
+                            st.write(f"{key}: {value} (tipo: {type(value)})")
+                
                 errors.append(error_msg)
                 continue
         
