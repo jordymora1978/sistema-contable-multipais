@@ -8,7 +8,6 @@ import io
 import time
 import re
 import gc  # Garbage collector para liberación de memoria
-import psutil  # Para monitoreo de memoria
 
 # Configuración optimizada para archivos grandes
 st.set_page_config(
@@ -19,22 +18,22 @@ st.set_page_config(
 )
 
 # CONFIGURACIONES PARA ARCHIVOS GRANDES
-MAX_MEMORY_USAGE = 85  # Porcentaje máximo de memoria a usar
 CHUNK_SIZE = 500  # Tamaño de chunk para procesamiento
 BATCH_SIZE = 25   # Tamaño de batch para inserción en BD (reducido)
 
-def get_memory_usage():
-    """Obtiene el uso actual de memoria"""
-    return psutil.virtual_memory().percent
+# Configuración de Supabase
+@st.cache_resource
+def init_supabase():
+    url = "https://pvbzzpeyhhxexyabizbv.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2Ynp6cGV5aGh4ZXh5YWJpemJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5OTc5ODcsImV4cCI6MjA2OTU3Mzk4N30.06S8jDjNReAd6Oj8AZvOS2PUcO2ASJHVA3VUNYVeAR4"
+    return create_client(url, key)
 
-def check_memory_and_clean():
-    """Verifica memoria y limpia si es necesario"""
-    memory_usage = get_memory_usage()
-    if memory_usage > MAX_MEMORY_USAGE:
-        gc.collect()  # Forzar garbage collection
-        st.warning(f"⚠️ Uso de memoria alto ({memory_usage:.1f}%). Liberando memoria...")
-        time.sleep(1)
-    return get_memory_usage()
+supabase = init_supabase()
+
+def clean_memory():
+    """Libera memoria forzando garbage collection"""
+    gc.collect()
+    time.sleep(0.1)  # Pequeña pausa para permitir limpieza
 
 def read_file_optimized(file_obj, file_type="unknown"):
     """Lee archivos con optimización para archivos grandes"""
@@ -49,26 +48,39 @@ def read_file_optimized(file_obj, file_type="unknown"):
             if file_size > 50:  # Si es mayor a 50MB
                 st.info("🔄 Archivo grande detectado. Leyendo en chunks...")
                 chunks = []
-                chunk_reader = pd.read_csv(file_obj, chunksize=CHUNK_SIZE)
                 
-                chunk_count = 0
-                for chunk in chunk_reader:
-                    chunks.append(chunk)
-                    chunk_count += 1
+                # Leer en chunks para archivos grandes
+                try:
+                    chunk_reader = pd.read_csv(file_obj, chunksize=CHUNK_SIZE)
+                    chunk_count = 0
                     
-                    # Mostrar progreso cada 10 chunks
-                    if chunk_count % 10 == 0:
-                        st.info(f"📋 Procesando chunk {chunk_count}...")
-                        check_memory_and_clean()
-                
-                df = pd.concat(chunks, ignore_index=True)
-                del chunks  # Liberar memoria
-                gc.collect()
+                    progress_bar = st.progress(0)
+                    
+                    for chunk in chunk_reader:
+                        chunks.append(chunk)
+                        chunk_count += 1
+                        
+                        # Mostrar progreso cada 10 chunks
+                        if chunk_count % 10 == 0:
+                            st.info(f"📋 Procesando chunk {chunk_count}...")
+                            clean_memory()
+                            progress_bar.progress(min(1.0, chunk_count * CHUNK_SIZE / (file_size * 100)))
+                    
+                    progress_bar.progress(1.0)
+                    df = pd.concat(chunks, ignore_index=True)
+                    del chunks  # Liberar memoria
+                    clean_memory()
+                    
+                except Exception as chunk_error:
+                    st.warning(f"⚠️ Error leyendo en chunks: {chunk_error}")
+                    st.info("🔄 Intentando lectura normal...")
+                    file_obj.seek(0)  # Resetear archivo
+                    df = pd.read_csv(file_obj)
             else:
                 # Archivo pequeño, leer normalmente
                 df = pd.read_csv(file_obj)
         else:
-            # Para Excel, usar engine optimizado
+            # Para Excel
             if file_size > 20:  # Si es mayor a 20MB
                 st.info("🔄 Archivo Excel grande. Usando engine optimizado...")
                 df = pd.read_excel(file_obj, engine='openpyxl')
@@ -76,6 +88,10 @@ def read_file_optimized(file_obj, file_type="unknown"):
                 df = pd.read_excel(file_obj)
         
         st.success(f"✅ {file_type} cargado: {len(df):,} registros, {len(df.columns)} columnas")
+        
+        # Optimizar memoria del DataFrame
+        df = optimize_dataframe_memory(df)
+        
         return df
         
     except MemoryError:
@@ -91,30 +107,87 @@ def optimize_dataframe_memory(df):
         return df
     
     st.info("🎯 Optimizando uso de memoria...")
-    initial_memory = df.memory_usage(deep=True).sum() / 1024**2
     
-    # Optimizar tipos de datos
-    for col in df.columns:
-        col_type = df[col].dtype
+    try:
+        initial_memory = df.memory_usage(deep=True).sum() / 1024**2
         
-        # Convertir object a category si tiene pocos valores únicos
-        if col_type == 'object':
-            if df[col].nunique() / len(df) < 0.5:  # Si menos del 50% son únicos
-                df[col] = df[col].astype('category')
+        # Optimizar tipos de datos
+        for col in df.columns:
+            col_type = df[col].dtype
+            
+            # Convertir object a category si tiene pocos valores únicos
+            if col_type == 'object':
+                try:
+                    unique_ratio = df[col].nunique() / len(df)
+                    if unique_ratio < 0.5:  # Si menos del 50% son únicos
+                        df[col] = df[col].astype('category')
+                except:
+                    pass  # Si falla, continuar
+            
+            # Optimizar enteros
+            elif col_type in ['int64']:
+                try:
+                    df[col] = pd.to_numeric(df[col], downcast='integer')
+                except:
+                    pass
+            
+            # Optimizar flotantes
+            elif col_type in ['float64']:
+                try:
+                    df[col] = pd.to_numeric(df[col], downcast='float')
+                except:
+                    pass
         
-        # Optimizar enteros
-        elif col_type in ['int64']:
-            df[col] = pd.to_numeric(df[col], downcast='integer')
+        final_memory = df.memory_usage(deep=True).sum() / 1024**2
+        reduction = ((initial_memory - final_memory) / initial_memory * 100) if initial_memory > 0 else 0
         
-        # Optimizar flotantes
-        elif col_type in ['float64']:
-            df[col] = pd.to_numeric(df[col], downcast='float')
+        st.success(f"✅ Memoria optimizada: {initial_memory:.1f}MB → {final_memory:.1f}MB ({reduction:.1f}% reducción)")
+        
+    except Exception as e:
+        st.warning(f"⚠️ Error optimizando memoria: {str(e)}")
     
-    final_memory = df.memory_usage(deep=True).sum() / 1024**2
-    reduction = (initial_memory - final_memory) / initial_memory * 100
-    
-    st.success(f"✅ Memoria optimizada: {initial_memory:.1f}MB → {final_memory:.1f}MB ({reduction:.1f}% reducción)")
     return df
+
+def clean_id_optimized(value):
+    """Versión optimizada de clean_id"""
+    if pd.isna(value) or value is None:
+        return None
+    
+    try:
+        str_value = str(value).strip()
+        if str_value.lower() in ['nan', 'none', 'null', '']:
+            return None
+        
+        str_value = str_value.strip("'\"")
+        if str_value.endswith('.0') and str_value[:-2].isdigit():
+            str_value = str_value[:-2]
+        
+        return str_value if str_value else None
+    except:
+        return None
+
+def calculate_asignacion(account_name, serial_number):
+    """Calcula la asignación basada en el account_name y serial_number"""
+    if pd.isna(account_name) or pd.isna(serial_number):
+        return None
+    
+    clean_serial = clean_id_optimized(serial_number)
+    if not clean_serial:
+        return None
+    
+    account_mapping = {
+        '1-TODOENCARGO-CO': 'TDC',
+        '2-MEGATIENDA SPA': 'MEGA',
+        '4-MEGA TIENDAS PERUANAS': 'MGA-PE',
+        '5-DETODOPARATODOS': 'DTPT',
+        '6-COMPRAFACIL': 'CFA',
+        '7-COMPRA-YA': 'CPYA',
+        '8-FABORCARGO': 'FBC',
+        '3-VEENDELO': 'VEEN'
+    }
+    
+    prefix = account_mapping.get(account_name, '')
+    return f"{prefix}{clean_serial}" if prefix else clean_serial
 
 def process_matching_optimized(base_df, secondary_df, match_rules, prefix):
     """Procesa matching entre DataFrames optimizado para archivos grandes"""
@@ -122,10 +195,6 @@ def process_matching_optimized(base_df, secondary_df, match_rules, prefix):
         return base_df
     
     st.info(f"🔗 Procesando matching {prefix}...")
-    
-    # Optimizar DataFrames antes del matching
-    base_df = optimize_dataframe_memory(base_df)
-    secondary_df = optimize_dataframe_memory(secondary_df)
     
     # Crear índices para matching rápido
     match_dicts = {}
@@ -142,7 +211,7 @@ def process_matching_optimized(base_df, secondary_df, match_rules, prefix):
     
     # Agregar columnas del archivo secundario
     for col in secondary_df.columns:
-        new_col_name = f'{prefix}_{col.lower().replace(" ", "_")}'
+        new_col_name = f'{prefix}_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'
         base_df[new_col_name] = np.nan
     
     # Procesar en chunks para evitar problemas de memoria
@@ -172,39 +241,102 @@ def process_matching_optimized(base_df, secondary_df, match_rules, prefix):
             # Si encontró match, copiar datos
             if matched_row is not None:
                 for col in secondary_df.columns:
-                    new_col_name = f'{prefix}_{col.lower().replace(" ", "_")}'
+                    new_col_name = f'{prefix}_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'
                     base_df.loc[idx, new_col_name] = matched_row.get(col)
         
         # Actualizar progreso
         progress = (chunk_idx + 1) / total_chunks
         progress_bar.progress(progress)
         
-        # Verificar memoria cada 10 chunks
-        if chunk_idx % 10 == 0:
-            check_memory_and_clean()
+        # Limpiar memoria cada 20 chunks
+        if chunk_idx % 20 == 0:
+            clean_memory()
     
     st.success(f"✅ {prefix} procesado: {matched_count:,} matches encontrados")
     return base_df
 
-def clean_id_optimized(value):
-    """Versión optimizada de clean_id"""
-    if pd.isna(value) or value is None:
-        return None
+def map_column_names(df):
+    """Mapea nombres de columnas del CSV a los nombres de la base de datos"""
+    column_mapping = {
+        'System#': 'system_number',
+        'Serial#': 'serial_number',
+        'order_id': 'order_id',
+        'pack_id': 'pack_id',
+        'ASIN': 'asin',
+        'client_first_name': 'client_first_name',
+        'client_last_name': 'client_last_name',
+        'client_doc_id': 'client_doc_id',
+        'account_name': 'account_name',
+        'date_created': 'date_created',
+        'quantity': 'quantity',
+        'title': 'title',
+        'unit_price': 'unit_price',
+        'logistic_type': 'logistic_type',
+        'address_line': 'address_line',
+        'street_name': 'street_name',
+        'street_number': 'street_number',
+        'city': 'city',
+        'state': 'state',
+        'country': 'country',
+        'receiver_phone': 'receiver_phone',
+        'amz_order_id': 'amz_order_id',
+        'prealert_id': 'prealert_id',
+        'ETIQUETA_ENVIO': 'etiqueta_envio',
+        'order_status_meli': 'order_status_meli',
+        'Declare Value': 'declare_value',
+        'Meli Fee': 'meli_fee',
+        'IVA': 'iva',
+        'ICA': 'ica',
+        'FUENTE': 'fuente',
+        'senders_cost': 'senders_cost',
+        'gross_amount': 'gross_amount',
+        'net_received_amount': 'net_received_amount',
+        'nombre_del_tercero': 'nombre_del_tercero',
+        'direccion': 'direccion',
+        'apelido_del_tercero': 'apelido_del_tercero',
+        'estado': 'estado',
+        'razon_social': 'razon_social',
+        'ciudad': 'ciudad',
+        'numero_de_documento': 'numero_de_documento',
+        'digital_verification': 'digital_verification',
+        'tipo': 'tipo',
+        'telefono': 'telefono',
+        'giro': 'giro',
+        'correo': 'correo',
+        'net_real_amount': 'net_real_amount',
+        'logistic_weight_lbs': 'logistic_weight_lbs',
+        'refunded_date': 'refunded_date',
+        'Asignacion': 'asignacion',
+    }
     
-    try:
-        str_value = str(value).strip()
-        if str_value.lower() in ['nan', 'none', 'null', '']:
-            return None
-        
-        str_value = str_value.strip("'\"")
-        if str_value.endswith('.0') and str_value[:-2].isdigit():
-            str_value = str_value[:-2]
-        
-        return str_value if str_value else None
-    except:
-        return None
+    renamed_df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+    return renamed_df
 
-def insert_to_supabase_optimized(df, supabase):
+def apply_basic_formatting(df):
+    """Aplicar formatos básicos sin afectar campos numéricos para BD"""
+    if df is None or df.empty:
+        return df
+    
+    st.info("🔧 Aplicando formatos básicos...")
+    
+    # Corrección de encoding en columnas de texto
+    text_columns = [
+        'client_first_name', 'client_last_name', 'title', 'address_line', 
+        'street_name', 'city', 'state', 'country', 'nombre_del_tercero',
+        'direccion', 'apelido_del_tercero', 'estado', 'razon_social', 'ciudad'
+    ]
+    
+    for col in text_columns:
+        if col in df.columns:
+            try:
+                df[col] = df[col].astype(str).str.strip()
+            except:
+                pass
+    
+    st.success("✅ Formatos básicos aplicados")
+    return df
+
+def insert_to_supabase_optimized(df):
     """Inserción optimizada en Supabase para archivos grandes"""
     try:
         st.info("🔍 Preparando datos para inserción optimizada...")
@@ -212,18 +344,34 @@ def insert_to_supabase_optimized(df, supabase):
         # Mapear columnas
         df_mapped = map_column_names(df)
         
-        # Filtrar columnas válidas
-        db_columns = get_valid_db_columns()
+        # Columnas válidas para la BD
+        db_columns = [
+            'system_number', 'serial_number', 'order_id', 'pack_id', 'asin',
+            'client_first_name', 'client_last_name', 'client_doc_id', 'account_name',
+            'date_created', 'quantity', 'title', 'unit_price', 'logistic_type',
+            'address_line', 'street_name', 'street_number', 'city', 'state', 'country',
+            'receiver_phone', 'amz_order_id', 'prealert_id', 'etiqueta_envio',
+            'order_status_meli', 'declare_value', 'meli_fee', 'iva', 'ica', 'fuente',
+            'senders_cost', 'gross_amount', 'net_received_amount', 'nombre_del_tercero',
+            'direccion', 'apelido_del_tercero', 'estado', 'razon_social', 'ciudad',
+            'numero_de_documento', 'digital_verification', 'tipo', 'telefono', 'giro',
+            'correo', 'net_real_amount', 'logistic_weight_lbs', 'refunded_date',
+            'asignacion'
+        ]
+        
+        # Agregar columnas dinámicas
+        for col in df_mapped.columns:
+            if (col.startswith('logistics_') or col.startswith('aditionals_') or col.startswith('cxp_')) and col not in db_columns:
+                db_columns.append(col)
+        
+        # Filtrar DataFrame
         df_filtered = df_mapped[[col for col in db_columns if col in df_mapped.columns]]
         
         st.info(f"📊 Preparando {len(df_filtered):,} registros con {len(df_filtered.columns)} columnas")
         
-        # Optimizar memoria antes de conversión
-        df_filtered = optimize_dataframe_memory(df_filtered)
-        
-        # Preparar registros en chunks más pequeños
+        # Procesar en batches pequeños
         total_records = len(df_filtered)
-        batch_size = BATCH_SIZE  # Batch más pequeño para archivos grandes
+        batch_size = BATCH_SIZE
         total_batches = (total_records + batch_size - 1) // batch_size
         
         total_inserted = 0
@@ -265,10 +413,10 @@ def insert_to_supabase_optimized(df, supabase):
                 progress_bar.progress(progress)
                 status_text.text(f"Insertando: {total_inserted:,}/{total_records:,} registros (Batch {batch_idx + 1}/{total_batches})")
                 
-                # Liberar memoria
-                del batch_records
-                if batch_idx % 10 == 0:
-                    check_memory_and_clean()
+                # Liberar memoria cada 20 batches
+                if batch_idx % 20 == 0:
+                    del batch_records
+                    clean_memory()
                 
             except Exception as batch_error:
                 error_msg = f"Error en batch {batch_idx + 1}: {str(batch_error)}"
@@ -290,14 +438,10 @@ def process_files_for_large_datasets(drapify_df, logistics_df=None, aditionals_d
     
     st.info("🚀 Iniciando procesamiento optimizado para archivos grandes...")
     
-    # Verificar memoria inicial
-    initial_memory = get_memory_usage()
-    st.info(f"📊 Uso de memoria inicial: {initial_memory:.1f}%")
-    
     # PASO 1: Optimizar archivo base
-    st.info("📋 Optimizando archivo base Drapify...")
-    consolidated_df = optimize_dataframe_memory(drapify_df.copy())
-    check_memory_and_clean()
+    st.info("📋 Procesando archivo base Drapify...")
+    consolidated_df = drapify_df.copy()
+    clean_memory()
     
     # PASO 2: Procesar Logistics
     if logistics_df is not None:
@@ -308,7 +452,7 @@ def process_files_for_large_datasets(drapify_df, logistics_df=None, aditionals_d
         consolidated_df = process_matching_optimized(
             consolidated_df, logistics_df, matching_rules, 'logistics'
         )
-        check_memory_and_clean()
+        clean_memory()
     
     # PASO 3: Procesar Aditionals
     if aditionals_df is not None:
@@ -316,7 +460,7 @@ def process_files_for_large_datasets(drapify_df, logistics_df=None, aditionals_d
         consolidated_df = process_matching_optimized(
             consolidated_df, aditionals_df, matching_rules, 'aditionals'
         )
-        check_memory_and_clean()
+        clean_memory()
     
     # PASO 4: Calcular Asignación
     st.info("🏷️ Calculando asignaciones...")
@@ -325,71 +469,51 @@ def process_files_for_large_datasets(drapify_df, logistics_df=None, aditionals_d
             lambda row: calculate_asignacion(row['account_name'], row['Serial#']), 
             axis=1
         )
-    check_memory_and_clean()
+    clean_memory()
     
     # PASO 5: Procesar CXP
     if cxp_df is not None:
+        # Normalizar columnas CXP
+        if 'Ref #' not in cxp_df.columns and 'ref_number' in cxp_df.columns:
+            cxp_df = cxp_df.rename(columns={'ref_number': 'Ref #'})
+        
         matching_rules = [('Asignacion', 'Ref #')]
         consolidated_df = process_matching_optimized(
             consolidated_df, cxp_df, matching_rules, 'cxp'
         )
-        check_memory_and_clean()
+        clean_memory()
     
     # PASO 6: Aplicar formatos básicos
     consolidated_df = apply_basic_formatting(consolidated_df)
     
-    # PASO 7: Validación final de memoria
-    final_memory = get_memory_usage()
-    st.info(f"📊 Uso de memoria final: {final_memory:.1f}%")
-    
     st.success(f"🎉 Procesamiento optimizado completado: {len(consolidated_df):,} registros")
     return consolidated_df
 
-# Función auxiliar para obtener columnas válidas de BD
-def get_valid_db_columns():
-    """Retorna lista de columnas válidas para la base de datos"""
-    return [
-        'system_number', 'serial_number', 'order_id', 'pack_id', 'asin',
-        'client_first_name', 'client_last_name', 'client_doc_id', 'account_name',
-        'date_created', 'quantity', 'title', 'unit_price', 'logistic_type',
-        'address_line', 'street_name', 'street_number', 'city', 'state', 'country',
-        'receiver_phone', 'amz_order_id', 'prealert_id', 'etiqueta_envio',
-        'order_status_meli', 'declare_value', 'meli_fee', 'iva', 'ica', 'fuente',
-        'senders_cost', 'gross_amount', 'net_received_amount', 'nombre_del_tercero',
-        'direccion', 'apelido_del_tercero', 'estado', 'razon_social', 'ciudad',
-        'numero_de_documento', 'digital_verification', 'tipo', 'telefono', 'giro',
-        'correo', 'net_real_amount', 'logistic_weight_lbs', 'refunded_date',
-        'asignacion'
-    ]
-
-# FUNCIÓN PRINCIPAL OPTIMIZADA
-def main_optimized():
-    """Función principal optimizada para archivos grandes"""
+def main():
+    """Función principal optimizada"""
     
     st.title("📦 Consolidador de Órdenes - Optimizado para Archivos Grandes")
-    st.markdown("### 🚀 Procesamiento eficiente con gestión de memoria mejorada")
+    st.markdown("### 🚀 Procesamiento eficiente sin dependencias externas")
     
-    # Mostrar uso de memoria actual
-    current_memory = get_memory_usage()
-    memory_color = "🟢" if current_memory < 70 else "🟡" if current_memory < 85 else "🔴"
-    st.sidebar.metric("Memoria del Sistema", f"{current_memory:.1f}%", delta=None)
-    st.sidebar.write(f"{memory_color} Estado de memoria")
+    # Test de conexión
+    try:
+        test_result = supabase.table('consolidated_orders').select('id').limit(1).execute()
+        st.sidebar.success("✅ Conectado a Supabase")
+    except Exception as e:
+        st.sidebar.error(f"❌ Error de conexión: {str(e)}")
     
     # Configuración optimizada
     with st.sidebar:
         st.header("⚙️ Configuración Optimizada")
         
-        # Configuraciones para archivos grandes
         st.subheader("🔧 Optimizaciones Activas")
         st.success("✅ Lectura en chunks para archivos >50MB")
         st.success("✅ Procesamiento en batches")
         st.success("✅ Gestión automática de memoria")
-        st.success("✅ Inserción optimizada en BD")
+        st.success("✅ Sin dependencias externas")
         
-        # Mostrar configuraciones actuales
         st.info(f"📊 Chunk size: {CHUNK_SIZE:,} registros")
         st.info(f"📦 Batch size BD: {BATCH_SIZE} registros")
-        st.info(f"⚠️ Límite memoria: {MAX_MEMORY_USAGE}%")
     
     # Área de carga de archivos
     st.header("📁 Subir Archivos (Optimizado para Archivos Grandes)")
@@ -438,18 +562,13 @@ def main_optimized():
             st.write(file_info)
     
     # Botón de procesamiento optimizado
-    if st.button("🚀 Procesar con Optimización para Archivos Grandes", 
+    if st.button("🚀 Procesar con Optimización Avanzada", 
                  disabled=not drapify_file, type="primary"):
         
         with st.spinner("Procesando archivos grandes de forma optimizada..."):
             try:
-                # Verificar memoria antes de empezar
-                if get_memory_usage() > 80:
-                    st.warning("⚠️ Uso de memoria alto. Liberando memoria...")
-                    gc.collect()
-                
-                # Inicializar Supabase
-                supabase = init_supabase()
+                # Limpiar memoria antes de empezar
+                clean_memory()
                 
                 # Leer archivos con optimización
                 drapify_df = read_file_optimized(drapify_file, "Drapify")
@@ -474,13 +593,13 @@ def main_optimized():
                     drapify_df, logistics_df, aditionals_df, cxp_df
                 )
                 
-                # Mostrar preview limitado para archivos grandes
+                # Mostrar preview limitado
                 st.header("👀 Preview de Datos (Primeros 20 registros)")
                 st.dataframe(consolidated_df.head(20), use_container_width=True)
                 
                 # Estadísticas
                 st.header("📊 Estadísticas del Procesamiento")
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3 = st.columns(3)
                 
                 with col1:
                     st.metric("Total Registros", f"{len(consolidated_df):,}")
@@ -489,14 +608,12 @@ def main_optimized():
                 with col3:
                     memory_usage = consolidated_df.memory_usage(deep=True).sum() / 1024**2
                     st.metric("Memoria DataFrame", f"{memory_usage:.1f}MB")
-                with col4:
-                    st.metric("Memoria Sistema", f"{get_memory_usage():.1f}%")
                 
                 # Guardar en BD con optimización
                 st.header("💾 Guardando en Base de Datos (Optimizado)")
                 
                 with st.spinner("Insertando datos optimizados..."):
-                    inserted_count = insert_to_supabase_optimized(consolidated_df, supabase)
+                    inserted_count = insert_to_supabase_optimized(consolidated_df)
                     
                     if inserted_count > 0:
                         st.success(f"🎉 ¡Archivos grandes procesados exitosamente!")
@@ -508,109 +625,15 @@ def main_optimized():
                 
                 # Liberar memoria final
                 del consolidated_df
-                if 'drapify_df' in locals():
-                    del drapify_df
-                if 'logistics_df' in locals() and logistics_df is not None:
-                    del logistics_df
-                if 'aditionals_df' in locals() and aditionals_df is not None:
-                    del aditionals_df
-                if 'cxp_df' in locals() and cxp_df is not None:
-                    del cxp_df
-                
-                gc.collect()
-                st.info(f"🧹 Memoria liberada. Uso actual: {get_memory_usage():.1f}%")
+                clean_memory()
+                st.info("🧹 Memoria liberada exitosamente")
                 
             except MemoryError:
-                st.error("❌ Error de memoria. Los archivos son demasiado grandes para procesar simultáneamente.")
-                st.info("💡 Sugerencia: Procesa los archivos por separado o divídelos en archivos más pequeños.")
+                st.error("❌ Error de memoria. Los archivos son demasiado grandes.")
+                st.info("💡 Sugerencia: Divide los archivos en partes más pequeñas.")
             except Exception as e:
-                st.error(f"❌ Error procesando archivos grandes: {str(e)}")
+                st.error(f"❌ Error procesando archivos: {str(e)}")
                 st.exception(e)
 
-# Mantener las funciones originales necesarias
-def init_supabase():
-    url = "https://pvbzzpeyhhxexyabizbv.supabase.co"
-    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2Ynp6cGV5aGh4ZXh5YWJpemJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5OTc5ODcsImV4cCI6MjA2OTU3Mzk4N30.06S8jDjNReAd6Oj8AZvOS2PUcO2ASJHVA3VUNYVeAR4"
-    return create_client(url, key)
-
-def calculate_asignacion(account_name, serial_number):
-    """Mantener función original"""
-    if pd.isna(account_name) or pd.isna(serial_number):
-        return None
-    
-    clean_serial = clean_id_optimized(serial_number)
-    if not clean_serial:
-        return None
-    
-    account_mapping = {
-        '1-TODOENCARGO-CO': 'TDC',
-        '2-MEGATIENDA SPA': 'MEGA',
-        '4-MEGA TIENDAS PERUANAS': 'MGA-PE',
-        '5-DETODOPARATODOS': 'DTPT',
-        '6-COMPRAFACIL': 'CFA',
-        '7-COMPRA-YA': 'CPYA',
-        '8-FABORCARGO': 'FBC',
-        '3-VEENDELO': 'VEEN'
-    }
-    
-    prefix = account_mapping.get(account_name, '')
-    return f"{prefix}{clean_serial}" if prefix else clean_serial
-
-def map_column_names(df):
-    """Mantener función original de mapeo"""
-    column_mapping = {
-        'System#': 'system_number',
-        'Serial#': 'serial_number',
-        'order_id': 'order_id',
-        'pack_id': 'pack_id',
-        'ASIN': 'asin',
-        'client_first_name': 'client_first_name',
-        'client_last_name': 'client_last_name',
-        'client_doc_id': 'client_doc_id',
-        'account_name': 'account_name',
-        'date_created': 'date_created',
-        'quantity': 'quantity',
-        'title': 'title',
-        'unit_price': 'unit_price',
-        'logistic_type': 'logistic_type',
-        'address_line': 'address_line',
-        'street_name': 'street_name',
-        'street_number': 'street_number',
-        'city': 'city',
-        'state': 'state',
-        'country': 'country',
-        'receiver_phone': 'receiver_phone',
-        'amz_order_id': 'amz_order_id',
-        'prealert_id': 'prealert_id',
-        'ETIQUETA_ENVIO': 'etiqueta_envio',
-        'order_status_meli': 'order_status_meli',
-        'Declare Value': 'declare_value',
-        'Meli Fee': 'meli_fee',
-        'IVA': 'iva',
-        'ICA': 'ica',
-        'FUENTE': 'fuente',
-        'senders_cost': 'senders_cost',
-        'gross_amount': 'gross_amount',
-        'net_received_amount': 'net_received_amount',
-        'Asignacion': 'asignacion',
-    }
-    
-    renamed_df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-    return renamed_df
-
-def apply_basic_formatting(df):
-    """Versión simplificada de formateo básico"""
-    if df is None or df.empty:
-        return df
-    
-    # Solo aplicar correcciones esenciales para BD
-    text_columns = ['client_first_name', 'client_last_name', 'title', 'city', 'state', 'country']
-    
-    for col in text_columns:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-    
-    return df
-
 if __name__ == "__main__":
-    main_optimized()
+    main()
