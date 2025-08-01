@@ -607,53 +607,21 @@ def insert_to_supabase(df):
         # Preparar datos para inserción
         records = df_filtered.to_dict('records')
         
-        # SOLUCIÓN MEJORADA: Usar regex para detectar patrones numéricos como sugiere ChatGPT
-        st.info("🔧 Aplicando conversión inteligente con regex...")
+        # VOLVER A LA SOLUCIÓN SIMPLE QUE FUNCIONABA AYER
+        st.info("🔧 Aplicando conversión simple...")
         
         for record in records:
             for key, value in record.items():
                 if pd.isna(value) or value is None:
                     record[key] = None
                 elif isinstance(value, (pd.Timestamp, datetime)):
+                    # Convertir fechas a string ISO format
                     record[key] = value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)
-                elif key.startswith('cxp_'):
-                    # Preservar columnas CXP como texto original
-                    record[key] = str(value) if value is not None else None
-                elif isinstance(value, str):
-                    try:
-                        # Limpiar espacios y comillas como sugiere ChatGPT
-                        cleaned_value = value.strip().replace('"', '').replace("'", '')
-                        
-                        # Si es decimal tipo "0.0" que termina en ".0", convertir a entero
-                        if re.match(r'^\d+\.0$', cleaned_value):
-                            record[key] = int(float(cleaned_value))
-                        # Si es decimal con decimales reales "123.45" 
-                        elif re.match(r'^\d+\.\d+$', cleaned_value):
-                            record[key] = float(cleaned_value)
-                        # Si es entero simple "123"
-                        elif re.match(r'^\d+$', cleaned_value):
-                            record[key] = int(cleaned_value)
-                        # Si es string vacío
-                        elif cleaned_value == "":
-                            record[key] = None
-                        else:
-                            # Mantener como string si no coincide con patrones numéricos
-                            record[key] = cleaned_value
-                    except (ValueError, TypeError):
-                        # Si algo falla, mantener como string original
-                        record[key] = str(value) if value is not None else None
                 elif isinstance(value, (np.integer, np.floating)):
                     if np.isfinite(value):
-                        # Manejar tipos numpy
-                        if isinstance(value, np.floating) and value == int(value):
-                            record[key] = int(value)
-                        else:
-                            record[key] = float(value) if isinstance(value, np.floating) else int(value)
+                        record[key] = float(value) if isinstance(value, np.floating) else int(value)
                     else:
                         record[key] = None
-                else:
-                    # Para cualquier otro tipo, convertir a string
-                    record[key] = str(value) if value is not None else None
         
         # Verificación adicional de duplicados por order_id
         order_ids = [r.get('order_id') for r in records if r.get('order_id')]
