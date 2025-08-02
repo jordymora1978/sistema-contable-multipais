@@ -3,11 +3,10 @@ import pandas as pd
 import numpy as np
 from supabase import create_client, Client
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import io
 import time
 import re
-import hashlib
 
 # Configuración de la página
 st.set_page_config(
@@ -20,6 +19,7 @@ st.set_page_config(
 # Configuración de Supabase con credenciales integradas
 @st.cache_resource
 def init_supabase():
+    # Configuración del nuevo proyecto Supabase
     url = "https://pvbzzpeyhhxexyabizbv.supabase.co"
     key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2Ynp6cGV5aGh4ZXh5YWJpemJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5OTc5ODcsImV4cCI6MjA2OTU3Mzk4N30.06S8jDjNReAd6Oj8AZvOS2PUcO2ASJHVA3VUNYVeAR4"
     return create_client(url, key)
@@ -28,35 +28,13 @@ supabase = init_supabase()
 
 # Test de conexión al inicio
 try:
+    # Verificar conexión con la nueva tabla
     test_result = supabase.table('consolidated_orders').select('id').limit(1).execute()
     st.sidebar.success("✅ Conectado a Supabase")
 except Exception as e:
     st.sidebar.error(f"❌ Error de conexión: {str(e)}")
 
-# FUNCIONES DE UTILIDAD
-
-def calculate_file_hash(file):
-    """Calcula el hash MD5 de un archivo para detectar duplicados"""
-    file.seek(0)
-    file_hash = hashlib.md5(file.read()).hexdigest()
-    file.seek(0)  # Reset file position
-    return file_hash
-
-def check_file_already_processed(file_hash):
-    """Verifica si un archivo ya fue procesado anteriormente"""
-    try:
-        result = supabase.table('processing_logs').select('*').eq('file_hash', file_hash).execute()
-        return len(result.data) > 0, result.data[0] if result.data else None
-    except:
-        return False, None
-
-def get_recent_uploads(limit=10):
-    """Obtiene los últimos archivos subidos"""
-    try:
-        result = supabase.table('processing_logs').select('*').order('processing_date', desc=True).limit(limit).execute()
-        return result.data
-    except:
-        return []
+# NUEVAS FUNCIONES DE FORMATO Y LIMPIEZA
 
 def fix_encoding(text):
     """Corrige caracteres mal codificados automáticamente"""
@@ -64,7 +42,9 @@ def fix_encoding(text):
         return text
     
     try:
+        # Intentar corregir encoding automáticamente si contiene caracteres problemáticos
         if 'Ã' in text:
+            # Codificar como latin-1 y decodificar como utf-8
             fixed = text.encode('latin-1').decode('utf-8')
             return fixed
     except:
@@ -77,6 +57,7 @@ def format_currency_no_decimals(value):
     if pd.isna(value):
         return None
     try:
+        # Convertir a número y redondear
         num_value = float(value)
         rounded_value = round(num_value)
         return f"${rounded_value:,}"
@@ -88,22 +69,25 @@ def format_currency_with_decimals(value):
     if pd.isna(value):
         return None
     try:
+        # Convertir a número manteniendo decimales
         num_value = float(value)
         return f"${num_value:,.2f}"
     except:
         return value
 
 def format_date_standard(date_value, input_format="auto"):
-    """Convierte fechas a formato YYYY-MM-DD"""
+    """Convierte fechas a formato YYYY-MM-DD usando manipulación de strings"""
     if pd.isna(date_value) or date_value == "":
         return None
     
     date_str = str(date_value).strip()
     
     try:
+        # Formato: YYYY-MM-DD HH:MM (2025-07-21 21:49) -> YYYY-MM-DD
         if re.match(r'\d{4}-\d{2}-\d{2}\s', date_str):
             return date_str.split(' ')[0]
         
+        # Formato: MM/DD/YYYY (07/23/2025) -> YYYY-MM-DD
         if re.match(r'\d{1,2}/\d{1,2}/\d{4}', date_str):
             parts = date_str.split('/')
             if len(parts) == 3:
@@ -112,145 +96,67 @@ def format_date_standard(date_value, input_format="auto"):
                 year = parts[2]
                 return f"{year}-{month}-{day}"
         
+        # Si ya está en formato YYYY-MM-DD, devolverlo como está
         if re.match(r'\d{4}-\d{2}-\d{2}$', date_str):
             return date_str
             
     except:
         pass
     
-    return date_str
+    return date_str  # Si no se puede convertir, devolver original
 
-def clean_numeric_value(value):
-    """Limpia valores numéricos, eliminando basura como 'XXXXXXXXXX'"""
-    if pd.isna(value) or value is None:
-        return None
-    
-    str_value = str(value).strip()
-    
-    # Lista de valores basura conocidos
-    garbage_values = [
-        'XXXXXXXXXX', 'XXXXXXX', 'XXXXX', 'XXX',
-        'N/A', 'n/a', 'NA', 'na',
-        '-', '--', '---',
-        '#N/A', '#VALUE!', '#REF!',  # Errores de Excel
-        'null', 'NULL', 'Null',
-        '', ' '
-    ]
-    
-    if str_value in garbage_values:
-        return None
-    
-    # Intentar convertir a número
+def check_existing_data():
+    """Verifica si hay datos existentes en la tabla"""
     try:
-        # Remover símbolos de moneda y comas
-        clean_value = str_value.replace('$', '').replace(',', '').replace(' ', '')
-        return float(clean_value)
+        result = supabase.table('consolidated_orders').select('id').limit(1).execute()
+        return len(result.data) > 0
     except:
-        return None
+        return False
 
-def prepare_record_for_db(record):
-    """Prepara un registro para inserción en la base de datos"""
-    # Columnas que son INTEGER en la base de datos
-    integer_columns = ['system_number', 'quantity', 'iva', 'ica']
-    
-    # Columnas que son NUMERIC en la base de datos
-    numeric_columns = [
-        'unit_price', 'declare_value', 'meli_fee', 'fuente', 
-        'senders_cost', 'gross_amount', 'net_received_amount',
-        'digital_verification', 'net_real_amount', 'logistic_weight_lbs',
-        # Columnas logistics
-        'logistics_fob', 'logistics_weight', 'logistics_length', 
-        'logistics_width', 'logistics_height', 'logistics_insurance',
-        'logistics_logistics', 'logistics_duties_prealert', 
-        'logistics_duties_pay', 'logistics_duty_fee', 'logistics_saving',
-        'logistics_total',
-        # Columnas aditionals
-        'aditionals_quantity', 'aditionals_unitprice', 'aditionals_total',
-        # Columnas cxp
-        'cxp_co_aereo', 'cxp_arancel', 'cxp_iva', 'cxp_handling',
-        'cxp_dest_delivery', 'cxp_amt_due', 'cxp_goods_value'
-    ]
-    
-    cleaned_record = {}
-    
-    for key, value in record.items():
-        if pd.isna(value) or value is None:
-            cleaned_record[key] = None
-        elif isinstance(value, (pd.Timestamp, datetime)):
-            cleaned_record[key] = value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)
-        elif key in integer_columns:
-            # Para columnas INTEGER
-            try:
-                clean_val = clean_numeric_value(value)
-                if clean_val is not None:
-                    cleaned_record[key] = int(float(clean_val))
-                else:
-                    cleaned_record[key] = 0  # Valor por defecto para INTEGER
-            except:
-                cleaned_record[key] = 0
-        elif key in numeric_columns:
-            # Para columnas NUMERIC
-            clean_val = clean_numeric_value(value)
-            if clean_val is not None:
-                cleaned_record[key] = clean_val
-            else:
-                cleaned_record[key] = None  # NULL para NUMERIC
-        else:
-            # Para columnas TEXT
-            cleaned_record[key] = str(value)
-    
-    return cleaned_record
+def clear_existing_data():
+    """Elimina todos los registros existentes de las tablas"""
+    try:
+        # Limpiar tablas usando SQL directo
+        supabase.postgrest.session.post(
+            f"{supabase.url}/rest/v1/rpc/truncate_tables"
+        )
+        return True
+    except:
+        try:
+            # Método alternativo: eliminar registros
+            supabase.table('consolidated_orders').delete().neq('id', 0).execute()
+            supabase.table('processing_logs').delete().neq('id', 0).execute()
+            return True
+        except Exception as e:
+            st.error(f"Error limpiando datos: {str(e)}")
+            return False
 
+# Función para limpiar y normalizar IDs
 def clean_id(value):
     """Limpia y normaliza IDs removiendo comillas y espacios"""
     if pd.isna(value):
         return None
     str_value = str(value).strip()
+    # Remover comilla simple al inicio si existe
     if str_value.startswith("'"):
         str_value = str_value[1:]
+    # Remover .0 al final si es un número entero
     if str_value.endswith('.0'):
         str_value = str_value[:-2]
     return str_value if str_value and str_value != 'nan' else None
 
-def clean_id_aggressive(value):
-    """Limpieza más agresiva para IDs corruptos"""
-    if pd.isna(value):
-        return None
-    
-    # Convertir a string y limpiar
-    str_value = str(value).strip()
-    
-    # Remover caracteres problemáticos comunes
-    str_value = str_value.replace("'", "")  # Comillas simples
-    str_value = str_value.replace('"', "")  # Comillas dobles
-    str_value = str_value.replace(" ", "")  # Espacios
-    str_value = str_value.replace("\t", "") # Tabs
-    str_value = str_value.replace("\n", "") # Saltos de línea
-    str_value = str_value.replace(".", "")  # Puntos (excepto el .0 del final)
-    
-    # Remover .0 al final si quedó
-    if str_value.endswith('0') and len(str_value) > 1:
-        # Verificar si era un .0
-        original = str(value)
-        if '.0' in original:
-            str_value = str_value[:-1]
-    
-    return str_value if str_value and str_value != 'nan' else None
-
-def validate_logistics_match(drapify_row, logistics_row):
-    """Valida que el match sea correcto comparando campos adicionales"""
-    # Por ahora retorna True, pero se puede mejorar comparando nombres, fechas, etc.
-    return True
-
+# Función para calcular asignación según las reglas especificadas
 def calculate_asignacion(account_name, serial_number):
     """Calcula la asignación basada en el account_name y serial_number"""
     if pd.isna(account_name) or pd.isna(serial_number):
         return None
     
+    # Limpiar serial_number para evitar decimales
     clean_serial = clean_id(serial_number)
     if not clean_serial:
         return None
     
+    # Mapeo exacto según las especificaciones
     account_mapping = {
         '1-TODOENCARGO-CO': 'TDC',
         '2-MEGATIENDA SPA': 'MEGA',
@@ -265,9 +171,12 @@ def calculate_asignacion(account_name, serial_number):
     prefix = account_mapping.get(account_name, '')
     return f"{prefix}{clean_serial}" if prefix else clean_serial
 
+# Función para mapear nombres de columnas del CSV a la base de datos
 def map_column_names(df):
     """Mapea nombres de columnas del CSV a los nombres de la base de datos"""
     column_mapping = {
+        # Columnas del sistema (se manejan automáticamente)
+        # Columnas de Drapify
         'System#': 'system_number',
         'Serial#': 'serial_number',
         'order_id': 'order_id',
@@ -316,14 +225,31 @@ def map_column_names(df):
         'net_real_amount': 'net_real_amount',
         'logistic_weight_lbs': 'logistic_weight_lbs',
         'refunded_date': 'refunded_date',
+        
+        # Columnas de Logistics (ya tienen prefijo logistics_)
+        # Se mantienen como están
+        
+        # Columnas de Aditionals (ya tienen prefijo aditionals_)
+        # Se mantienen como están
+        
+        # Asignacion
         'Asignacion': 'asignacion',
+        
+        # Columnas de CXP (ya tienen prefijo cxp_)
+        # Se mantienen como están
     }
     
+    # Aplicar mapeo solo a las columnas que existen
     renamed_df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
     return renamed_df
 
+# NUEVA FUNCIÓN: Aplicar solo formatos no monetarios (para BD)
 def apply_basic_formatting(df):
     """Aplica formatos básicos sin afectar campos numéricos para BD"""
+    
+    st.info("🔧 Aplicando formatos básicos para base de datos...")
+    
+    # C) Corregir encoding en columnas de texto
     text_columns = [
         'client_first_name', 'client_last_name', 'title', 'address_line', 
         'street_name', 'city', 'state', 'country', 'nombre_del_tercero',
@@ -336,37 +262,48 @@ def apply_basic_formatting(df):
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
     
+    # D) Formatear fechas
     date_columns = {
-        'date_created': 'datetime',
-        'cxp_date': 'cxp_format'
+        'date_created': 'datetime',  # YYYY-MM-DD HH:MM
+        'cxp_date': 'cxp_format'     # MM/DD/YYYY del archivo CXP
     }
     
     for col, format_type in date_columns.items():
         if col in df.columns:
             df[col] = df[col].apply(format_date_standard)
     
+    st.success("✅ Formatos básicos aplicados")
     return df
 
+# NUEVA FUNCIÓN: Aplicar formatos monetarios solo para descarga CSV
 def apply_display_formatting(df):
     """Aplica formatos de visualización (currency) solo para descarga CSV"""
+    
+    st.info("🎨 Aplicando formatos de visualización para descarga...")
+    
+    # Crear copia para no afectar el DataFrame original
     display_df = df.copy()
     
+    # A) Formato Currency sin decimales: $#,##0
     currency_no_decimals_columns = [
         'unit_price', 'meli_fee', 'iva', 'ica', 'fuente', 
         'senders_cost', 'gross_amount', 'net_received_amount', 'net_real_amount',
         'order_cost', 'Meli Fee', 'IVA', 'ICA', 'FUENTE'
+        # NOTA: Columnas CXP se mantienen con formato original del archivo
     ]
     
     for col in currency_no_decimals_columns:
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(format_currency_no_decimals)
     
+    # B) Formato Currency con decimales: $#,##0.00
     currency_with_decimals_columns = [
         'profit_price', 'declare_value', 'data_base_price',
         'logistics_fob', 'logistics_weight', 'logistics_length', 'logistics_width', 
         'logistics_height', 'logistics_insurance', 'logistics_logistics',
         'logistics_duties_prealert', 'logistics_duties_pay', 'logistics_duty_fee',
         'logistics_saving', 'logistics_total',
+        # Agregando columnas CXP con formato de decimales como logistics_total
         'cxp_co_aereo', 'cxp_arancel', 'cxp_iva', 'cxp_handling', 
         'cxp_dest_delivery', 'cxp_amt_due', 'cxp_goods_value'
     ]
@@ -375,804 +312,773 @@ def apply_display_formatting(df):
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(format_currency_with_decimals)
     
+    st.success("✅ Formatos de visualización aplicados")
     return display_df
 
-# FUNCIONES PARA PROCESAMIENTO INCREMENTAL
-
-def process_drapify_file(drapify_df):
-    """Procesa archivo Drapify y actualiza/inserta registros"""
-    st.info("📋 Procesando archivo Drapify...")
+# Función principal para procesar archivos según las reglas especificadas
+def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_df=None, cxp_df=None):
+    """
+    Procesa y consolida todos los archivos según las reglas exactas especificadas:
+    1. Drapify como base
+    2. Logistics: buscar order_id en Reference, luego prealert_id en Order number
+    3. Aditionals: buscar prealert_id en Order Id
+    4. Calcular Asignacion
+    5. CXP: buscar Asignacion en Ref #
+    6. Aplicar formatos y validaciones
+    """
     
-    # Aplicar formatos básicos
-    drapify_df = apply_basic_formatting(drapify_df)
+    st.info("🔄 Iniciando consolidación según reglas especificadas...")
     
-    # Calcular Asignacion si es posible
-    if 'account_name' in drapify_df.columns and 'Serial#' in drapify_df.columns:
-        drapify_df['Asignacion'] = drapify_df.apply(
+    # PASO 1: Usar Drapify como base (todas las columnas tal como están)
+    consolidated_df = drapify_df.copy()
+    st.success(f"✅ Archivo base Drapify procesado: {len(consolidated_df)} registros")
+    
+    # PASO 2: Procesar archivo Logistics si está disponible
+    if logistics_df is not None and not logistics_df.empty:
+        st.info("🚚 Procesando archivo Logistics...")
+        
+        # Crear diccionario para mapeo rápido de Logistics
+        logistics_dict_by_reference = {}
+        logistics_dict_by_order_number = {}
+        
+        for idx, row in logistics_df.iterrows():
+            # Limpiar los IDs para mejor matching
+            reference = clean_id(row.get('Reference', ''))
+            order_number = clean_id(row.get('Order number', ''))
+            
+            if reference:
+                logistics_dict_by_reference[reference] = row
+            if order_number:
+                logistics_dict_by_order_number[order_number] = row
+        
+        st.info(f"📋 Logistics indexado: {len(logistics_dict_by_reference)} por Reference, {len(logistics_dict_by_order_number)} por Order number")
+        
+        # Agregar columnas de Logistics al DataFrame consolidado
+        logistics_columns = [
+            'Guide Number', 'Order number', 'Reference', 'SAP Code', 'Invoice', 
+            'Status', 'FOB', 'Unit', 'Weight', 'Length', 'Width', 'Height',
+            'Insurance', 'Logistics', 'Duties Prealert', 'Duties Pay', 
+            'Duty Fee', 'Saving', 'Total', 'Description', 'Shipper', 'Phone',
+            'Consignee', 'Identification', 'Country', 'State', 'City', 
+            'Address', 'Master Guide', 'Tariff Position', 'External Id', 'Invoice'
+        ]
+        
+        # Inicializar columnas de Logistics con NaN
+        for col in logistics_columns:
+            if col in logistics_df.columns:
+                consolidated_df[f'logistics_{col.lower().replace(" ", "_")}'] = np.nan
+        
+        matched_by_order_id = 0
+        matched_by_prealert_id = 0
+        
+        # Hacer el matching según las reglas
+        for idx, row in consolidated_df.iterrows():
+            # Limpiar los IDs para mejor matching
+            order_id = clean_id(row.get('order_id', ''))
+            prealert_id = clean_id(row.get('prealert_id', ''))
+            
+            logistics_row = None
+            match_type = None
+            
+            # Regla 1: Buscar order_id en Reference
+            if order_id and order_id in logistics_dict_by_reference:
+                logistics_row = logistics_dict_by_reference[order_id]
+                matched_by_order_id += 1
+                match_type = "order_id->Reference"
+            
+            # Regla 2: Si no encuentra, buscar prealert_id en Order number
+            elif prealert_id and prealert_id in logistics_dict_by_order_number:
+                logistics_row = logistics_dict_by_order_number[prealert_id]
+                matched_by_prealert_id += 1
+                match_type = "prealert_id->Order number"
+            
+            # Si encontró match, copiar los datos
+            if logistics_row is not None:
+                for col in logistics_columns:
+                    if col in logistics_df.columns:
+                        consolidated_df.loc[idx, f'logistics_{col.lower().replace(" ", "_")}'] = logistics_row.get(col)
+                
+                # Debug: mostrar algunos matches
+                if (matched_by_order_id + matched_by_prealert_id) <= 5:
+                    st.write(f"✅ Match {matched_by_order_id + matched_by_prealert_id}: {match_type} - order_id: {order_id}, prealert_id: {prealert_id}")
+        
+        st.success(f"✅ Logistics procesado: {matched_by_order_id} matches por order_id, {matched_by_prealert_id} matches por prealert_id")
+    
+    # PASO 3: Procesar archivo Aditionals si está disponible
+    if aditionals_df is not None and not aditionals_df.empty:
+        st.info("➕ Procesando archivo Aditionals...")
+        
+        # Crear diccionario para mapeo rápido de Aditionals
+        aditionals_dict = {}
+        for idx, row in aditionals_df.iterrows():
+            order_id = clean_id(row.get('Order Id', ''))
+            if order_id:
+                aditionals_dict[order_id] = row
+        
+        st.info(f"📋 Aditionals indexado: {len(aditionals_dict)} registros")
+        
+        # Agregar columnas de Aditionals
+        aditionals_columns = ['Order Id', 'Item', 'Reference', 'Description', 'Quantity', 'UnitPrice', 'Total']
+        
+        for col in aditionals_columns:
+            if col in aditionals_df.columns:
+                consolidated_df[f'aditionals_{col.lower().replace(" ", "_")}'] = np.nan
+        
+        matched_aditionals = 0
+        
+        # Hacer matching por prealert_id -> Order Id
+        for idx, row in consolidated_df.iterrows():
+            prealert_id = clean_id(row.get('prealert_id', ''))
+            
+            if prealert_id and prealert_id in aditionals_dict:
+                aditionals_row = aditionals_dict[prealert_id]
+                matched_aditionals += 1
+                
+                for col in aditionals_columns:
+                    if col in aditionals_df.columns:
+                        consolidated_df.loc[idx, f'aditionals_{col.lower().replace(" ", "_")}'] = aditionals_row.get(col)
+                
+                # Debug: mostrar algunos matches
+                if matched_aditionals <= 5:
+                    st.write(f"✅ Aditional Match {matched_aditionals}: prealert_id {prealert_id} encontrado")
+        
+        st.success(f"✅ Aditionals procesado: {matched_aditionals} matches por prealert_id")
+    
+    # PASO 4: Calcular columna Asignacion
+    st.info("🏷️ Calculando columna Asignacion...")
+    
+    if 'account_name' in consolidated_df.columns and 'Serial#' in consolidated_df.columns:
+        consolidated_df['Asignacion'] = consolidated_df.apply(
             lambda row: calculate_asignacion(row['account_name'], row['Serial#']), 
             axis=1
         )
+        asignaciones_calculadas = consolidated_df['Asignacion'].notna().sum()
+        st.success(f"✅ Asignaciones calculadas: {asignaciones_calculadas}")
+    else:
+        st.warning("⚠️ No se pudo calcular Asignacion: faltan columnas account_name o Serial#")
     
-    # Mapear columnas
-    df_mapped = map_column_names(drapify_df)
-    
-    # Filtrar columnas base de Drapify
-    base_columns = [
-        'system_number', 'serial_number', 'order_id', 'pack_id', 'asin',
-        'client_first_name', 'client_last_name', 'client_doc_id', 'account_name',
-        'date_created', 'quantity', 'title', 'unit_price', 'logistic_type',
-        'address_line', 'street_name', 'street_number', 'city', 'state', 'country',
-        'receiver_phone', 'amz_order_id', 'prealert_id', 'etiqueta_envio',
-        'order_status_meli', 'declare_value', 'meli_fee', 'iva', 'ica', 'fuente',
-        'senders_cost', 'gross_amount', 'net_received_amount', 'nombre_del_tercero',
-        'direccion', 'apelido_del_tercero', 'estado', 'razon_social', 'ciudad',
-        'numero_de_documento', 'digital_verification', 'tipo', 'telefono', 'giro',
-        'correo', 'net_real_amount', 'logistic_weight_lbs', 'refunded_date',
-        'asignacion'
-    ]
-    
-    df_filtered = df_mapped[[col for col in base_columns if col in df_mapped.columns]]
-    
-    return df_filtered
-
-def process_logistics_file(logistics_df, logistics_date):
-    """Procesa archivo Logistics con fecha asignada"""
-    st.info(f"🚚 Procesando archivo Logistics con fecha: {logistics_date}")
-    
-    # Agregar la columna de fecha
-    logistics_df['logistics_date'] = logistics_date
-    
-    # Preparar diccionarios para matching con limpieza agresiva
-    logistics_dict_by_reference = {}
-    logistics_dict_by_order_number = {}
-    
-    for idx, row in logistics_df.iterrows():
-        # Usar limpieza agresiva para mejor matching
-        reference = clean_id_aggressive(row.get('Reference', ''))
-        order_number = clean_id_aggressive(row.get('Order number', ''))
+    # PASO 5: Procesar archivo CXP si está disponible
+    if cxp_df is not None and not cxp_df.empty:
+        st.info("💰 Procesando archivo CXP...")
         
-        row_data = row.to_dict()
-        row_data['logistics_date'] = logistics_date
+        # Mostrar las columnas del archivo CXP para debugging
+        st.write(f"🔍 Columnas encontradas en CXP: {list(cxp_df.columns)}")
         
-        if reference:
-            logistics_dict_by_reference[reference] = row_data
-        if order_number:
-            logistics_dict_by_order_number[order_number] = row_data
-    
-    return logistics_dict_by_reference, logistics_dict_by_order_number
-
-def process_aditionals_file(aditionals_df):
-    """Procesa archivo Aditionals"""
-    st.info("➕ Procesando archivo Aditionals...")
-    
-    aditionals_dict = {}
-    for idx, row in aditionals_df.iterrows():
-        # Usar limpieza agresiva
-        order_id = clean_id_aggressive(row.get('Order Id', ''))
-        if order_id:
-            aditionals_dict[order_id] = row.to_dict()
-    
-    st.info(f"📋 Aditionals indexado: {len(aditionals_dict)} registros")
-    return aditionals_dict
-
-def process_cxp_file(cxp_df):
-    """Procesa archivo CXP"""
-    st.info("💰 Procesando archivo CXP...")
-    
-    # Normalizar nombres de columnas
-    column_mapping = {
-        'OT Number': 'OT Number',
-        'Date': 'Date', 
-        'Ref #': 'Ref #',
-        'Consignee': 'Consignee',
-        'CO Aereo': 'CO Aereo',
-        'Arancel': 'Arancel',
-        'IVA': 'IVA',
-        'Handling': 'Handling',
-        'Dest. Delivery': 'Dest. Delivery',
-        'Amt. Due': 'Amt. Due',
-        'Goods Value': 'Goods Value',
-        # Mapeo para diferentes formatos
-        'ot_number': 'OT Number',
-        'date': 'Date',
-        'consignee': 'Consignee',
-        'co_aereo': 'CO Aereo',
-        'arancel': 'Arancel',
-        'iva': 'IVA',
-        'handling': 'Handling',
-        'dest_delivery': 'Dest. Delivery',
-        'amt_due': 'Amt. Due',
-        'goods_value': 'Goods Value'
-    }
-    
-    cxp_df_normalized = cxp_df.rename(columns=column_mapping)
-    
-    cxp_dict = {}
-    for idx, row in cxp_df_normalized.iterrows():
-        # Usar limpieza agresiva
-        ref_number = clean_id_aggressive(row.get('Ref #', ''))
-        if ref_number:
-            cxp_dict[ref_number] = row.to_dict()
-    
-    st.info(f"📋 CXP indexado: {len(cxp_dict)} registros")
-    return cxp_dict
-
-def upsert_to_database(data, file_type, file_name, file_hash):
-    """Inserta o actualiza registros en la base de datos"""
-    try:
-        if file_type == 'drapify':
-            # Para Drapify, hacer upsert por order_id
-            records = data.to_dict('records')
+        # Normalizar nombres de columnas del archivo CXP (soportar ambos formatos)
+        column_mapping = {
+            # Formato archivo pequeño -> formato estándar
+            'OT Number': 'OT Number',
+            'Date': 'Date', 
+            'Ref #': 'Ref #',
+            'Consignee': 'Consignee',
+            'CO Aereo': 'CO Aereo',
+            'Arancel': 'Arancel',
+            'IVA': 'IVA',
+            'Handling': 'Handling',
+            'Dest. Delivery': 'Dest. Delivery',
+            'Amt. Due': 'Amt. Due',
+            'Goods Value': 'Goods Value',
             
-            # Limpiar cada registro antes de insertar
-            cleaned_records = []
-            for record in records:
-                cleaned_record = prepare_record_for_db(record)
-                cleaned_records.append(cleaned_record)
+            # Formato archivo grande -> formato estándar (con espacios extra)
+            'ot_number': 'OT Number',
+            'date': 'Date',
+            'consignee': 'Consignee', 
+            'co_aereo': 'CO Aereo',
+            ' co_aereo ': 'CO Aereo',  # Con espacios
+            'arancel': 'Arancel',
+            ' arancel ': 'Arancel',   # Con espacios
+            'iva': 'IVA',
+            ' iva ': 'IVA',           # Con espacios
+            'dest_delivery': 'Dest. Delivery',
+            ' dest_delivery ': 'Dest. Delivery',  # Con espacios
+            ' Amt. Due ': 'Amt. Due', # Con espacios
+            ' Goods Value ': 'Goods Value'  # Con espacios
+        }
+        
+        # Aplicar mapeo de columnas
+        cxp_df_normalized = cxp_df.rename(columns=column_mapping)
+        
+        # Crear diccionario para mapeo rápido de CXP
+        cxp_dict = {}
+        for idx, row in cxp_df_normalized.iterrows():
+            ref_number = clean_id(row.get('Ref #', ''))
+            if ref_number:
+                cxp_dict[ref_number] = row
+        
+        st.info(f"📋 CXP indexado: {len(cxp_dict)} registros")
+        
+        # Mostrar algunos ejemplos de Ref # para debug
+        cxp_refs = list(cxp_dict.keys())[:5]
+        st.write(f"🔍 Ejemplos de Ref # en CXP: {cxp_refs}")
+        
+        # Agregar columnas de CXP (usar todas las columnas disponibles)
+        available_cxp_columns = []
+        standard_cxp_columns = ['OT Number', 'Date', 'Ref #', 'Consignee', 'CO Aereo', 
+                               'Arancel', 'IVA', 'Handling', 'Dest. Delivery', 'Amt. Due', 'Goods Value']
+        
+        for col in standard_cxp_columns:
+            if col in cxp_df_normalized.columns:
+                available_cxp_columns.append(col)
+                consolidated_df[f'cxp_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'] = np.nan
+        
+        st.write(f"📊 Columnas CXP que se procesarán: {available_cxp_columns}")
+        
+        matched_cxp = 0
+        
+        # Hacer matching por Asignacion -> Ref #
+        if 'Asignacion' in consolidated_df.columns:
+            # Mostrar algunos ejemplos de Asignacion para debug
+            asignaciones = consolidated_df['Asignacion'].dropna().head(5).tolist()
+            st.write(f"🔍 Ejemplos de Asignacion calculadas: {asignaciones}")
             
-            # Hacer upsert en lotes
-            batch_size = 50
-            total_processed = 0
-            errors = []
-            
-            for i in range(0, len(cleaned_records), batch_size):
-                batch = cleaned_records[i:i + batch_size]
+            for idx, row in consolidated_df.iterrows():
+                asignacion = clean_id(row.get('Asignacion', ''))
                 
-                try:
-                    # Usar upsert para actualizar si existe o insertar si no existe
-                    result = supabase.table('consolidated_orders').upsert(
-                        batch, 
-                        on_conflict='order_id'
-                    ).execute()
+                if asignacion and asignacion in cxp_dict:
+                    cxp_row = cxp_dict[asignacion]
+                    matched_cxp += 1
                     
-                    total_processed += len(batch)
-                except Exception as batch_error:
-                    st.error(f"Error en lote {i//batch_size + 1}: {str(batch_error)}")
-                    errors.append(str(batch_error))
-                    continue
+                    for col in available_cxp_columns:
+                        col_name = f'cxp_{col.lower().replace(" ", "_").replace(".", "").replace("#", "number")}'
+                        consolidated_df.loc[idx, col_name] = cxp_row.get(col)
+                    
+                    # Debug: mostrar algunos matches
+                    if matched_cxp <= 5:
+                        st.write(f"✅ CXP Match {matched_cxp}: Asignacion '{asignacion}' encontrada")
+        
+        st.success(f"✅ CXP procesado: {matched_cxp} matches por Asignacion")
+    
+    # PASO 6: Aplicar solo formatos básicos (sin currency para BD)
+    consolidated_df = apply_basic_formatting(consolidated_df)
+    
+    # PASO 7: Validación de duplicados por order_id
+    st.info("🔍 Validando duplicados por order_id...")
+    
+    if 'order_id' in consolidated_df.columns:
+        initial_count = len(consolidated_df)
+        # Eliminar duplicados manteniendo el primer registro
+        consolidated_df = consolidated_df.drop_duplicates(subset=['order_id'], keep='first')
+        final_count = len(consolidated_df)
+        
+        if initial_count != final_count:
+            removed_count = initial_count - final_count
+            st.warning(f"⚠️ Se removieron {removed_count} registros duplicados por order_id")
+        else:
+            st.success("✅ No se encontraron duplicados por order_id")
+    
+    st.success(f"🎉 Consolidación completada: {len(consolidated_df)} registros finales")
+    return consolidated_df
+
+# Función para insertar datos en Supabase
+def insert_to_supabase(df):
+    """Inserta los datos consolidados en Supabase con validación de duplicados"""
+    try:
+        st.info("🔍 Preparando datos para inserción...")
+        
+        # Mapear nombres de columnas del CSV a la base de datos
+        df_mapped = map_column_names(df)
+        
+        # Filtrar solo las columnas que existen en la tabla de la base de datos
+        # Estas son las columnas que definimos en la tabla SQL
+        db_columns = [
+            'system_number', 'serial_number', 'order_id', 'pack_id', 'asin',
+            'client_first_name', 'client_last_name', 'client_doc_id', 'account_name',
+            'date_created', 'quantity', 'title', 'unit_price', 'logistic_type',
+            'address_line', 'street_name', 'street_number', 'city', 'state', 'country',
+            'receiver_phone', 'amz_order_id', 'prealert_id', 'etiqueta_envio',
+            'order_status_meli', 'declare_value', 'meli_fee', 'iva', 'ica', 'fuente',
+            'senders_cost', 'gross_amount', 'net_received_amount', 'nombre_del_tercero',
+            'direccion', 'apelido_del_tercero', 'estado', 'razon_social', 'ciudad',
+            'numero_de_documento', 'digital_verification', 'tipo', 'telefono', 'giro',
+            'correo', 'net_real_amount', 'logistic_weight_lbs', 'refunded_date',
+            'asignacion'
+        ]
+        
+        # Agregar columnas de logistics, aditionals y cxp que existan
+        for col in df_mapped.columns:
+            if (col.startswith('logistics_') or col.startswith('aditionals_') or col.startswith('cxp_')) and col not in db_columns:
+                db_columns.append(col)
+        
+        # Filtrar DataFrame para incluir solo columnas que existen en la DB
+        df_filtered = df_mapped[[col for col in db_columns if col in df_mapped.columns]]
+        
+        st.info(f"📊 Preparando {len(df_filtered)} registros con {len(df_filtered.columns)} columnas")
+        
+        # Preparar datos para inserción
+        records = df_filtered.to_dict('records')
+        
+        # LIMPIEZA AGRESIVA CORREGIDA: Eliminar todos los valores problemáticos
+        st.info("🔥 Aplicando limpieza agresiva de datos corregida...")
+        
+        # Columnas que son INTEGER en la base de datos
+        integer_columns = ['system_number', 'quantity', 'iva', 'ica']
+        
+        # Valores basura que deben ser eliminados
+        garbage_values = [
+            "", " ", "  ", "   ",
+            "$-", " $- ", " $-", "$- ",
+            "XXXXXXXXXX", "xxxxxxxxxx",
+            "nan", "NaN", "NULL", "null",
+            "-", "--", "---",
+            "N/A", "n/a", "NA"
+        ]
+        
+        for record in records:
+            for key, value in record.items():
+                if pd.isna(value) or value is None:
+                    record[key] = None
+                elif isinstance(value, (pd.Timestamp, datetime)):
+                    record[key] = value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)
+                elif key in integer_columns:
+                    # MANEJO ESPECÍFICO para columnas INTEGER
+                    try:
+                        str_val = str(value).strip()
+                        if str_val in garbage_values or str_val == "0.0":
+                            record[key] = 0
+                        elif str_val.endswith('.0'):
+                            record[key] = int(float(value))
+                        else:
+                            record[key] = int(float(value))
+                    except:
+                        record[key] = 0
+                else:
+                    # LIMPIEZA AGRESIVA CORREGIDA para todas las demás columnas
+                    str_value = str(value).strip()
+                    
+                    # NUEVO: Corregir encoding ANTES de otros procesamientos
+                    str_value = fix_encoding(str_value)
+                    
+                    # NUEVO: Manejar notación científica en order_id
+                    if key == 'order_id' and ('E+' in str_value or 'e+' in str_value):
+                        try:
+                            # Convertir notación científica a número entero
+                            scientific_num = float(str_value)
+                            str_value = str(int(scientific_num))
+                        except:
+                            pass  # Si falla, mantener original
+                    
+                    # EXCEPCIÓN ESPECIAL: No limpiar agresivamente la columna title
+                    elif key == 'title':
+                        # Solo aplicar encoding fix y mantener el contenido
+                        if str_value in ['####', '', 'nan', 'NaN', 'NULL']:
+                            record[key] = None
+                        else:
+                            record[key] = str_value
+                    
+                    # Eliminar valores basura para otras columnas
+                    elif str_value in garbage_values:
+                        record[key] = None
+                    # Limpiar texto en columnas numéricas
+                    elif 'giro' in str_value.lower() or 'actividades' in str_value.lower() or 'hotel' in str_value.lower():
+                        record[key] = None
+                    elif 'ventas' in str_value.lower() or 'arequipa' in str_value.lower():
+                        record[key] = None
+                    # Limpiar símbolos extraños
+                    elif '$-' in str_value or '$$' in str_value:
+                        record[key] = None
+                    # NUEVO: Limpiar campos que solo tienen ####
+                    elif str_value == '####' or str_value.strip() == '':
+                        record[key] = None
+                    # Strings muy largos que no son números
+                    elif len(str_value) > 50 and not str_value.replace('.', '').replace('-', '').isdigit():
+                        record[key] = None
+                    # NUEVO: Limpiar números que parecen IDs pero con decimales
+                    elif key in ['serial_number', 'system_number'] and '.' in str_value:
+                        # Para serial_number y system_number, quitar decimales
+                        try:
+                            clean_num = str(int(float(str_value)))
+                            record[key] = clean_num
+                        except:
+                            record[key] = str_value
+                    else:
+                        record[key] = str_value if str_value else None
+        
+        # Verificación adicional de duplicados por order_id
+        order_ids = [r.get('order_id') for r in records if r.get('order_id')]
+        if len(set(order_ids)) != len(order_ids):
+            st.warning(f"⚠️ Detectados duplicados en order_id durante inserción. Removiendo duplicados...")
+            seen_order_ids = set()
+            unique_records = []
+            for record in records:
+                order_id = record.get('order_id')
+                if order_id not in seen_order_ids:
+                    seen_order_ids.add(order_id)
+                    unique_records.append(record)
+            records = unique_records
+            st.info(f"✅ Registros únicos para insertar: {len(records)}")
+        
+        # Insertar en lotes
+        batch_size = 50
+        total_inserted = 0
+        errors = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i in range(0, len(records), batch_size):
+            batch = records[i:i + batch_size]
             
-            # Log del procesamiento
+            try:
+                result = supabase.table('consolidated_orders').insert(batch).execute()
+                total_inserted += len(batch)
+                
+                progress = min(1.0, (i + batch_size) / len(records))
+                progress_bar.progress(progress)
+                status_text.text(f"Insertando: {total_inserted}/{len(records)} registros")
+                
+            except Exception as batch_error:
+                error_msg = f"Error en lote {i//batch_size + 1}: {str(batch_error)}"
+                st.error(error_msg)
+                errors.append(error_msg)
+                continue
+        
+        progress_bar.progress(1.0)
+        status_text.text(f"✅ Completado: {total_inserted} registros insertados")
+        
+        # Log del procesamiento
+        try:
             log_data = {
-                'file_type': file_type,
-                'file_name': file_name,
-                'file_hash': file_hash,
+                'file_type': 'consolidated',
                 'records_processed': len(records),
-                'records_matched': total_processed,
+                'records_matched': total_inserted,
                 'status': 'success' if not errors else 'partial_success',
                 'error_message': '; '.join(errors) if errors else None
             }
             supabase.table('processing_logs').insert(log_data).execute()
-            
-            return total_processed
-            
-        else:
-            # Para otros tipos de archivo, actualizar registros existentes
-            if file_type == 'logistics':
-                return update_logistics_data(data, file_name, file_hash)
-            elif file_type == 'aditionals':
-                return update_aditionals_data(data, file_name, file_hash)
-            elif file_type == 'cxp':
-                return update_cxp_data(data, file_name, file_hash)
-                
+        except Exception as log_error:
+            st.warning(f"Error logging process: {str(log_error)}")
+        
+        return total_inserted
+        
     except Exception as e:
-        st.error(f"Error en base de datos: {str(e)}")
+        st.error(f"Error general: {str(e)}")
         return 0
 
-def update_logistics_data(logistics_dicts, file_name, file_hash):
-    """Actualiza datos de logistics en registros existentes"""
-    logistics_dict_by_reference, logistics_dict_by_order_number = logistics_dicts
+# Interfaz principal
+def main():
+    st.title("📦 Consolidador de Órdenes")
+    st.markdown("### Procesa y consolida archivos con formatos profesionales")
     
-    # Obtener todos los order_ids y prealert_ids existentes
-    existing_records = supabase.table('consolidated_orders').select('id,order_id,prealert_id,asignacion').execute()
-    
-    updates_count = 0
-    no_match_count = 0
-    match_by_order_id = 0
-    match_by_prealert_id = 0
-    batch_updates = []
-    unmatched_records = []
-    
-    for record in existing_records.data:
-        # Usar limpieza agresiva para mejor matching
-        order_id = clean_id_aggressive(record.get('order_id', ''))
-        prealert_id = clean_id_aggressive(record.get('prealert_id', ''))
-        record_id = record.get('id')
+    # Sidebar con información
+    with st.sidebar:
+        st.header("⚙️ Configuración")
         
-        logistics_data = None
-        match_type = None
+        # Verificar si hay datos existentes
+        has_existing_data = check_existing_data()
         
-        # IMPORTANTE: Intentar AMBAS opciones, no usar elif
-        # Primero intenta con order_id -> Reference
-        if order_id and order_id in logistics_dict_by_reference:
-            potential_match = logistics_dict_by_reference[order_id]
-            if validate_logistics_match(record, potential_match):
-                logistics_data = potential_match
-                match_type = "order_id->Reference"
-                match_by_order_id += 1
-        
-        # Si no encontró match válido, intenta con prealert_id -> Order number
-        if not logistics_data and prealert_id and prealert_id in logistics_dict_by_order_number:
-            potential_match = logistics_dict_by_order_number[prealert_id]
-            if validate_logistics_match(record, potential_match):
-                logistics_data = potential_match
-                match_type = "prealert_id->Order number"
-                match_by_prealert_id += 1
-        
-        if logistics_data:
-            # Preparar datos para actualizar
-            update_data = {'id': record_id}
-            
-            # Mapear columnas de logistics
-            logistics_mapping = {
-                'Guide Number': 'logistics_guide_number',
-                'Order number': 'logistics_order_number',
-                'Reference': 'logistics_reference',
-                'SAP Code': 'logistics_sap_code',
-                'Invoice': 'logistics_invoice',
-                'Status': 'logistics_status',
-                'FOB': 'logistics_fob',
-                'Unit': 'logistics_unit',
-                'Weight': 'logistics_weight',
-                'Length': 'logistics_length',
-                'Width': 'logistics_width',
-                'Height': 'logistics_height',
-                'Insurance': 'logistics_insurance',
-                'Logistics': 'logistics_logistics',
-                'Duties Prealert': 'logistics_duties_prealert',
-                'Duties Pay': 'logistics_duties_pay',
-                'Duty Fee': 'logistics_duty_fee',
-                'Saving': 'logistics_saving',
-                'Total': 'logistics_total',
-                'Description': 'logistics_description',
-                'Shipper': 'logistics_shipper',
-                'Phone': 'logistics_phone',
-                'Consignee': 'logistics_consignee',
-                'Identification': 'logistics_identification',
-                'Country': 'logistics_country',
-                'State': 'logistics_state',
-                'City': 'logistics_city',
-                'Address': 'logistics_address',
-                'Master Guide': 'logistics_master_guide',
-                'Tariff Position': 'logistics_tariff_position',
-                'External Id': 'logistics_external_id',
-                'logistics_date': 'logistics_date'
-            }
-            
-            for orig_col, db_col in logistics_mapping.items():
-                if orig_col in logistics_data:
-                    value = logistics_data[orig_col]
-                    # Limpiar valores numéricos si es necesario
-                    if db_col in ['logistics_fob', 'logistics_weight', 'logistics_length', 
-                                  'logistics_width', 'logistics_height', 'logistics_insurance',
-                                  'logistics_logistics', 'logistics_duties_prealert', 
-                                  'logistics_duties_pay', 'logistics_duty_fee', 'logistics_saving',
-                                  'logistics_total']:
-                        value = clean_numeric_value(value)
-                    update_data[db_col] = value
-            
-            batch_updates.append(update_data)
-            updates_count += 1
-            
-            # Actualizar en lotes
-            if len(batch_updates) >= 50:
-                supabase.table('consolidated_orders').upsert(batch_updates).execute()
-                batch_updates = []
+        if has_existing_data:
+            st.warning("⚠️ Hay datos existentes en la BD")
+            clear_data = st.checkbox(
+                "🗑️ Limpiar datos existentes antes de procesar",
+                value=True,
+                help="Recomendado para evitar duplicados y aplicar nuevos formatos"
+            )
         else:
-            # Registrar no matches para reporte
-            no_match_count += 1
-            unmatched_records.append({
-                'order_id': record.get('order_id', ''),
-                'prealert_id': record.get('prealert_id', ''),
-                'asignacion': record.get('asignacion', '')
-            })
-    
-    # Actualizar últimos registros
-    if batch_updates:
-        supabase.table('consolidated_orders').upsert(batch_updates).execute()
-    
-    # Mostrar estadísticas detalladas
-    st.success(f"✅ Procesamiento completado:")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total actualizado", updates_count)
-    with col2:
-        st.metric("Match por order_id", match_by_order_id)
-    with col3:
-        st.metric("Match por prealert_id", match_by_prealert_id)
-    with col4:
-        st.metric("Sin match", no_match_count)
-    
-    # Mostrar registros sin match si hay
-    if unmatched_records and st.checkbox("Ver registros sin match", key="show_unmatched"):
-        st.warning(f"⚠️ {len(unmatched_records)} registros no encontraron match en Logistics")
-        unmatched_df = pd.DataFrame(unmatched_records)
-        st.dataframe(unmatched_df)
+            st.success("✅ Base de datos limpia")
+            clear_data = False
         
-        # Opción de descargar no matches
-        csv = unmatched_df.to_csv(index=False)
-        st.download_button(
-            "📥 Descargar registros sin match",
-            csv,
-            f"no_match_logistics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            "text/csv"
+        st.info("💾 Los datos se guardarán automáticamente en la base de datos")
+        
+        st.markdown("---")
+        st.markdown("**📋 Procesamiento mejorado:**")
+        st.markdown("1. 📋 **Drapify** (base - obligatorio)")
+        st.markdown("2. 🚚 **Logistics** (opcional)")
+        st.markdown("3. ➕ **Aditionals** (opcional)")
+        st.markdown("4. 🏷️ **Calcular Asignacion**")
+        st.markdown("5. 💰 **CXP** (opcional)")
+        st.markdown("6. 🎨 **Aplicar formatos profesionales**")
+        st.markdown("7. 🔍 **Validar duplicados**")
+        st.markdown("8. 💾 **Guardar en Base de Datos**")
+        
+        st.markdown("---")
+        st.markdown("**🎨 Formatos aplicados:**")
+        st.markdown("• **Currency** sin decimales")
+        st.markdown("• **Currency** con decimales")
+        st.markdown("• **Fechas** formato estándar")
+        st.markdown("• **Acentos** corregidos automáticamente")
+        st.markdown("• **Duplicados** eliminados")
+        st.markdown("• **Order ID** formato científico corregido")
+        st.markdown("• **Títulos** preservados completamente")
+    
+    # Área principal
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.header("📁 Subir Archivos")
+        
+        drapify_file = st.file_uploader(
+            "1. Archivo Drapify (OBLIGATORIO - Base de datos)",
+            type=['xlsx', 'xls', 'csv'],
+            key="drapify",
+            help="Archivo base con todas las órdenes"
+        )
+        
+        logistics_file = st.file_uploader(
+            "2. Archivo Logistics (opcional)",
+            type=['xlsx', 'xls', 'csv'],
+            key="logistics",
+            help="Costos de Anicam para envíos internacionales"
+        )
+        
+        aditionals_file = st.file_uploader(
+            "3. Archivo Aditionals (opcional)",
+            type=['xlsx', 'xls', 'csv'],
+            key="aditionals",
+            help="Costos adicionales de Anicam"
+        )
+        
+        cxp_file = st.file_uploader(
+            "4. Archivo CXP (opcional)",
+            type=['xlsx', 'xls', 'csv'],
+            key="cxp",
+            help="Costos de Chilexpress"
         )
     
-    # Log
-    log_data = {
-        'file_type': 'logistics',
-        'file_name': file_name,
-        'file_hash': file_hash,
-        'records_processed': len(logistics_dict_by_reference) + len(logistics_dict_by_order_number),
-        'records_matched': updates_count,
-        'status': 'success',
-        'error_message': f"No match: {no_match_count}, Match by order_id: {match_by_order_id}, Match by prealert_id: {match_by_prealert_id}"
-    }
-    supabase.table('processing_logs').insert(log_data).execute()
-    
-    return updates_count
-
-def update_aditionals_data(aditionals_dict, file_name, file_hash):
-    """Actualiza datos de aditionals en registros existentes"""
-    # Obtener todos los prealert_ids existentes
-    existing_records = supabase.table('consolidated_orders').select('id,order_id,prealert_id,asignacion').execute()
-    
-    updates_count = 0
-    no_match_count = 0
-    batch_updates = []
-    unmatched_records = []
-    
-    for record in existing_records.data:
-        prealert_id = clean_id_aggressive(record.get('prealert_id', ''))
-        record_id = record.get('id')
+    with col2:
+        st.header("📊 Estado")
         
-        aditionals_data = None
+        files_status = {
+            "Drapify": "✅" if drapify_file else "❌",
+            "Logistics": "✅" if logistics_file else "⚪",
+            "Aditionals": "✅" if aditionals_file else "⚪",
+            "CXP": "✅" if cxp_file else "⚪"
+        }
         
-        # Buscar match por prealert_id -> Order Id
-        if prealert_id and prealert_id in aditionals_dict:
-            aditionals_data = aditionals_dict[prealert_id]
-        
-        if aditionals_data:
-            # Preparar datos para actualizar
-            update_data = {'id': record_id}
-            
-            # Mapear columnas de aditionals
-            aditionals_mapping = {
-                'Order Id': 'aditionals_order_id',
-                'Item': 'aditionals_item',
-                'Reference': 'aditionals_reference',
-                'Description': 'aditionals_description',
-                'Quantity': 'aditionals_quantity',
-                'UnitPrice': 'aditionals_unitprice',
-                'Total': 'aditionals_total'
-            }
-            
-            for orig_col, db_col in aditionals_mapping.items():
-                if orig_col in aditionals_data:
-                    value = aditionals_data[orig_col]
-                    # Limpiar valores numéricos si es necesario
-                    if db_col in ['aditionals_quantity', 'aditionals_unitprice', 'aditionals_total']:
-                        value = clean_numeric_value(value)
-                    update_data[db_col] = value
-            
-            batch_updates.append(update_data)
-            updates_count += 1
-            
-            # Actualizar en lotes
-            if len(batch_updates) >= 50:
-                supabase.table('consolidated_orders').upsert(batch_updates).execute()
-                batch_updates = []
-        else:
-            no_match_count += 1
-            unmatched_records.append({
-                'order_id': record.get('order_id', ''),
-                'prealert_id': record.get('prealert_id', ''),
-                'asignacion': record.get('asignacion', '')
-            })
-    
-    # Actualizar últimos registros
-    if batch_updates:
-        supabase.table('consolidated_orders').upsert(batch_updates).execute()
-    
-    # Mostrar estadísticas
-    st.success(f"✅ Aditionals: {updates_count} actualizados, {no_match_count} sin match")
-    
-    # Log
-    log_data = {
-        'file_type': 'aditionals',
-        'file_name': file_name,
-        'file_hash': file_hash,
-        'records_processed': len(aditionals_dict),
-        'records_matched': updates_count,
-        'status': 'success'
-    }
-    supabase.table('processing_logs').insert(log_data).execute()
-    
-    return updates_count
-
-def update_cxp_data(cxp_dict, file_name, file_hash):
-    """Actualiza datos de CXP en registros existentes"""
-    # Obtener todos los registros con asignacion
-    existing_records = supabase.table('consolidated_orders').select('id,order_id,asignacion').execute()
-    
-    updates_count = 0
-    no_match_count = 0
-    batch_updates = []
-    unmatched_records = []
-    
-    for record in existing_records.data:
-        asignacion = clean_id_aggressive(record.get('asignacion', ''))
-        record_id = record.get('id')
-        
-        cxp_data = None
-        
-        # Buscar match por Asignacion -> Ref #
-        if asignacion and asignacion in cxp_dict:
-            cxp_data = cxp_dict[asignacion]
-        
-        if cxp_data:
-            # Preparar datos para actualizar
-            update_data = {'id': record_id}
-            
-            # Mapear columnas de CXP
-            cxp_mapping = {
-                'OT Number': 'cxp_ot_number',
-                'Date': 'cxp_date',
-                'Ref #': 'cxp_ref_number',
-                'Consignee': 'cxp_consignee',
-                'CO Aereo': 'cxp_co_aereo',
-                'Arancel': 'cxp_arancel',
-                'IVA': 'cxp_iva',
-                'Handling': 'cxp_handling',
-                'Dest. Delivery': 'cxp_dest_delivery',
-                'Amt. Due': 'cxp_amt_due',
-                'Goods Value': 'cxp_goods_value'
-            }
-            
-            for orig_col, db_col in cxp_mapping.items():
-                if orig_col in cxp_data:
-                    value = cxp_data[orig_col]
-                    # Limpiar valores numéricos si es necesario
-                    if db_col in ['cxp_co_aereo', 'cxp_arancel', 'cxp_iva', 'cxp_handling',
-                                  'cxp_dest_delivery', 'cxp_amt_due', 'cxp_goods_value']:
-                        value = clean_numeric_value(value)
-                    # Formatear fecha si es necesario
-                    if db_col == 'cxp_date':
-                        value = format_date_standard(value)
-                    update_data[db_col] = value
-            
-            batch_updates.append(update_data)
-            updates_count += 1
-            
-            # Actualizar en lotes
-            if len(batch_updates) >= 50:
-                supabase.table('consolidated_orders').upsert(batch_updates).execute()
-                batch_updates = []
-        else:
-            no_match_count += 1
-            if asignacion:  # Solo registrar si tiene asignacion
-                unmatched_records.append({
-                    'order_id': record.get('order_id', ''),
-                    'asignacion': asignacion
-                })
-    
-    # Actualizar últimos registros
-    if batch_updates:
-        supabase.table('consolidated_orders').upsert(batch_updates).execute()
-    
-    # Mostrar estadísticas
-    st.success(f"✅ CXP: {updates_count} actualizados, {no_match_count} sin match")
-    
-    # Log
-    log_data = {
-        'file_type': 'cxp',
-        'file_name': file_name,
-        'file_hash': file_hash,
-        'records_processed': len(cxp_dict),
-        'records_matched': updates_count,
-        'status': 'success'
-    }
-    supabase.table('processing_logs').insert(log_data).execute()
-    
-    return updates_count
-
-# INTERFAZ PRINCIPAL
-def main():
-    st.title("📦 Consolidador de Órdenes - Sistema Incremental")
-    st.markdown("### Carga archivos de forma independiente y flexible")
-    
-    # Sidebar
-    with st.sidebar:
-        st.header("📊 Panel de Control")
-        
-        # Mostrar últimos archivos subidos
-        st.subheader("📋 Últimos archivos procesados")
-        recent_uploads = get_recent_uploads()
-        
-        if recent_uploads:
-            for upload in recent_uploads:
-                st.write(f"**{upload.get('file_type', 'N/A')}**: {upload.get('file_name', 'N/A')}")
-                st.caption(f"📅 {upload.get('processing_date', 'N/A')}")
-                st.caption(f"📊 {upload.get('records_matched', 0)} registros")
-                st.divider()
-        else:
-            st.info("No hay archivos procesados aún")
+        for file_type, status in files_status.items():
+            st.write(f"{status} {file_type}")
         
         st.markdown("---")
         
-        # Estadísticas generales
-        try:
-            total_records = supabase.table('consolidated_orders').select('count', count='exact').execute()
-            st.metric("Total Registros en BD", total_records.count)
-        except:
-            st.metric("Total Registros en BD", "Error")
-    
-    # Tabs para diferentes tipos de archivo
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Drapify", "🚚 Logistics", "➕ Aditionals", "💰 CXP", "📊 Consultas"])
-    
-    # TAB DRAPIFY
-    with tab1:
-        st.header("📋 Cargar archivo Drapify")
-        st.info("Archivo base con información de órdenes. Se actualizarán registros existentes.")
-        
-        drapify_file = st.file_uploader(
-            "Selecciona archivo Drapify",
-            type=['xlsx', 'xls', 'csv'],
-            key="drapify"
-        )
-        
         if drapify_file:
-            # Verificar si ya fue procesado
-            file_hash = calculate_file_hash(drapify_file)
-            already_processed, prev_log = check_file_already_processed(file_hash)
-            
-            if already_processed:
-                st.warning(f"⚠️ Este archivo ya fue procesado el {prev_log.get('processing_date')}")
-                if not st.checkbox("Procesar de todos modos", key="force_drapify"):
-                    st.stop()
-            
-            if st.button("🚀 Procesar Drapify", type="primary", key="process_drapify"):
-                with st.spinner("Procesando archivo Drapify..."):
-                    try:
-                        # Leer archivo
-                        if drapify_file.name.endswith('.csv'):
-                            df = pd.read_csv(drapify_file)
-                        else:
-                            df = pd.read_excel(drapify_file)
-                        
-                        st.success(f"✅ Archivo cargado: {len(df)} registros")
-                        
-                        # Procesar
-                        processed_df = process_drapify_file(df)
-                        
-                        # Preview
-                        with st.expander("👀 Vista previa de datos"):
-                            st.dataframe(processed_df.head(10))
-                        
-                        # Guardar en BD
-                        inserted = upsert_to_database(
-                            processed_df, 
-                            'drapify', 
-                            drapify_file.name,
-                            file_hash
-                        )
-                        
-                        st.success(f"✅ {inserted} registros procesados exitosamente")
-                        st.balloons()
-                        
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
+            st.success("✅ Listo para procesar")
+        else:
+            st.warning("⚠️ Archivo Drapify requerido")
     
-    # TAB LOGISTICS
-    with tab2:
-        st.header("🚚 Cargar archivo Logistics")
-        st.info("Costos de Anicam para envíos internacionales")
+    # Botón de procesamiento
+    if st.button("🚀 Procesar con Todas las Correcciones", disabled=not drapify_file, type="primary"):
         
-        logistics_file = st.file_uploader(
-            "Selecciona archivo Logistics",
-            type=['xlsx', 'xls', 'csv'],
-            key="logistics"
-        )
-        
-        if logistics_file:
-            # Selector de fecha
-            st.subheader("📅 Selecciona fecha para este archivo")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if st.button("📅 Hoy", key="today_logistics"):
-                    st.session_state.logistics_date = datetime.now().date()
-            
-            with col2:
-                if st.button("📅 Ayer", key="yesterday_logistics"):
-                    st.session_state.logistics_date = (datetime.now() - timedelta(days=1)).date()
-            
-            with col3:
-                custom_date = st.date_input(
-                    "Fecha personalizada",
-                    value=st.session_state.get('logistics_date', datetime.now().date()),
-                    key="custom_date_logistics"
-                )
-                st.session_state.logistics_date = custom_date
-            
-            st.info(f"📅 Fecha seleccionada: **{st.session_state.logistics_date}**")
-            
-            # Verificar duplicado
-            file_hash = calculate_file_hash(logistics_file)
-            already_processed, prev_log = check_file_already_processed(file_hash)
-            
-            if already_processed:
-                st.warning(f"⚠️ Este archivo ya fue procesado el {prev_log.get('processing_date')}")
-                if not st.checkbox("Procesar de todos modos", key="force_logistics"):
-                    st.stop()
-            
-            if st.button("🚀 Procesar Logistics", type="primary", key="process_logistics"):
-                with st.spinner("Procesando archivo Logistics..."):
-                    try:
-                        # Leer archivo
-                        if logistics_file.name.endswith('.csv'):
-                            df = pd.read_csv(logistics_file)
-                        else:
-                            df = pd.read_excel(logistics_file)
-                        
-                        st.success(f"✅ Archivo cargado: {len(df)} registros")
-                        
-                        # Procesar con fecha
-                        logistics_dicts = process_logistics_file(df, st.session_state.logistics_date)
-                        
-                        # Actualizar en BD
-                        updated = update_logistics_data(
-                            logistics_dicts,
-                            logistics_file.name,
-                            file_hash
-                        )
-                        
-                        st.success(f"✅ {updated} registros actualizados con datos de Logistics")
-                        st.balloons()
-                        
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-    
-    # TAB ADITIONALS
-    with tab3:
-        st.header("➕ Cargar archivo Aditionals")
-        st.info("Costos adicionales de Anicam - Match por prealert_id")
-        
-        aditionals_file = st.file_uploader(
-            "Selecciona archivo Aditionals",
-            type=['xlsx', 'xls', 'csv'],
-            key="aditionals"
-        )
-        
-        if aditionals_file:
-            # Verificar duplicado
-            file_hash = calculate_file_hash(aditionals_file)
-            already_processed, prev_log = check_file_already_processed(file_hash)
-            
-            if already_processed:
-                st.warning(f"⚠️ Este archivo ya fue procesado el {prev_log.get('processing_date')}")
-                if not st.checkbox("Procesar de todos modos", key="force_aditionals"):
-                    st.stop()
-            
-            if st.button("🚀 Procesar Aditionals", type="primary", key="process_aditionals"):
-                with st.spinner("Procesando archivo Aditionals..."):
-                    try:
-                        # Leer archivo
-                        if aditionals_file.name.endswith('.csv'):
-                            df = pd.read_csv(aditionals_file)
-                        else:
-                            df = pd.read_excel(aditionals_file)
-                        
-                        st.success(f"✅ Archivo cargado: {len(df)} registros")
-                        
-                        # Procesar
-                        aditionals_dict = process_aditionals_file(df)
-                        
-                        # Actualizar en BD
-                        updated = update_aditionals_data(
-                            aditionals_dict,
-                            aditionals_file.name,
-                            file_hash
-                        )
-                        
-                        st.balloons()
-                        
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-    
-    # TAB CXP
-    with tab4:
-        st.header("💰 Cargar archivo CXP")
-        st.info("Costos de Chilexpress - Match por Asignacion")
-        
-        cxp_file = st.file_uploader(
-            "Selecciona archivo CXP",
-            type=['xlsx', 'xls', 'csv'],
-            key="cxp"
-        )
-        
-        if cxp_file:
-            # Verificar duplicado
-            file_hash = calculate_file_hash(cxp_file)
-            already_processed, prev_log = check_file_already_processed(file_hash)
-            
-            if already_processed:
-                st.warning(f"⚠️ Este archivo ya fue procesado el {prev_log.get('processing_date')}")
-                if not st.checkbox("Procesar de todos modos", key="force_cxp"):
-                    st.stop()
-            
-            if st.button("🚀 Procesar CXP", type="primary", key="process_cxp"):
-                with st.spinner("Procesando archivo CXP..."):
-                    try:
-                        # Leer archivo
-                        if cxp_file.name.endswith('.csv'):
-                            df = pd.read_csv(cxp_file)
-                        else:
-                            df = pd.read_excel(cxp_file)
-                        
-                        st.success(f"✅ Archivo cargado: {len(df)} registros")
-                        
-                        # Procesar
-                        cxp_dict = process_cxp_file(df)
-                        
-                        # Actualizar en BD
-                        updated = update_cxp_data(
-                            cxp_dict,
-                            cxp_file.name,
-                            file_hash
-                        )
-                        
-                        st.balloons()
-                        
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-    
-    # TAB CONSULTAS
-    with tab5:
-        st.header("🔍 Consultar Datos")
-        
-        # Búsqueda
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            search_order_id = st.text_input("Buscar por Order ID")
-        
-        with col2:
-            search_prealert_id = st.text_input("Buscar por Prealert ID")
-        
-        if st.button("🔍 Buscar"):
+        with st.spinner("Procesando archivos con todas las correcciones aplicadas..."):
             try:
-                query = supabase.table('consolidated_orders').select('*')
+                # Limpiar datos existentes si se seleccionó
+                if clear_data and has_existing_data:
+                    st.info("🗑️ Limpiando datos existentes...")
+                    if clear_existing_data():
+                        st.success("✅ Datos existentes eliminados")
+                    else:
+                        st.warning("⚠️ No se pudieron eliminar completamente los datos existentes")
                 
-                if search_order_id:
-                    query = query.eq('order_id', search_order_id)
+                # Leer archivo Drapify
+                if drapify_file.name.endswith('.csv'):
+                    drapify_df = pd.read_csv(drapify_file)
+                else:
+                    drapify_df = pd.read_excel(drapify_file)
                 
-                if search_prealert_id:
-                    query = query.eq('prealert_id', search_prealert_id)
+                st.success(f"✅ Drapify cargado: {len(drapify_df)} registros")
                 
-                result = query.execute()
+                # Mostrar columnas encontradas en Drapify
+                with st.expander("🔍 Columnas encontradas en Drapify"):
+                    st.write(list(drapify_df.columns))
+                
+                # Leer archivos opcionales
+                logistics_df = None
+                if logistics_file:
+                    if logistics_file.name.endswith('.csv'):
+                        logistics_df = pd.read_csv(logistics_file)
+                    else:
+                        logistics_df = pd.read_excel(logistics_file)
+                    st.success(f"✅ Logistics cargado: {len(logistics_df)} registros")
+                
+                aditionals_df = None
+                if aditionals_file:
+                    if aditionals_file.name.endswith('.csv'):
+                        aditionals_df = pd.read_csv(aditionals_file)
+                    else:
+                        aditionals_df = pd.read_excel(aditionals_file)
+                    st.success(f"✅ Aditionals cargado: {len(aditionals_df)} registros")
+                
+                cxp_df = None
+                if cxp_file:
+                    if cxp_file.name.endswith('.csv'):
+                        cxp_df = pd.read_csv(cxp_file)
+                    else:
+                        cxp_df = pd.read_excel(cxp_file)
+                    st.success(f"✅ CXP cargado: {len(cxp_df)} registros")
+                
+                # Procesar consolidación usando las reglas específicas
+                consolidated_df = process_files_according_to_rules(
+                    drapify_df, logistics_df, aditionals_df, cxp_df
+                )
+                
+                # Mostrar preview de los datos
+                st.header("👀 Preview de Datos Consolidados con Todas las Correcciones")
+                st.dataframe(consolidated_df.head(10), use_container_width=True)
+                
+                # Mostrar estadísticas detalladas
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Registros", len(consolidated_df))
+                
+                with col2:
+                    logistics_matched = 0
+                    if any(col.startswith('logistics_') for col in consolidated_df.columns):
+                        logistics_cols = [col for col in consolidated_df.columns if col.startswith('logistics_')]
+                        if logistics_cols:
+                            logistics_matched = consolidated_df[logistics_cols[0]].notna().sum()
+                    st.metric("Logistics Matched", logistics_matched)
+                
+                with col3:
+                    aditionals_matched = 0
+                    if any(col.startswith('aditionals_') for col in consolidated_df.columns):
+                        aditionals_cols = [col for col in consolidated_df.columns if col.startswith('aditionals_')]
+                        if aditionals_cols:
+                            aditionals_matched = consolidated_df[aditionals_cols[0]].notna().sum()
+                    st.metric("Aditionals Matched", aditionals_matched)
+                
+                with col4:
+                    cxp_matched = 0
+                    if any(col.startswith('cxp_') for col in consolidated_df.columns):
+                        cxp_cols = [col for col in consolidated_df.columns if col.startswith('cxp_')]
+                        if cxp_cols:
+                            cxp_matched = consolidated_df[cxp_cols[0]].notna().sum()
+                    st.metric("CXP Matched", cxp_matched)
+                
+                # Mostrar información de la columna Asignacion
+                if 'Asignacion' in consolidated_df.columns:
+                    st.subheader("🏷️ Análisis de Asignaciones")
+                    asignacion_counts = consolidated_df['Asignacion'].value_counts().head(10)
+                    st.bar_chart(asignacion_counts)
+                
+                # Mostrar análisis de títulos
+                if 'title' in consolidated_df.columns:
+                    st.subheader("📝 Análisis de Títulos")
+                    titles_with_data = consolidated_df['title'].notna().sum()
+                    st.metric("Títulos con datos", f"{titles_with_data:,}")
+                
+                # Guardar automáticamente en base de datos
+                st.header("💾 Guardando en Base de Datos")
+                
+                with st.spinner("Insertando datos corregidos en Supabase..."):
+                    inserted_count = insert_to_supabase(consolidated_df)
+                    
+                    if inserted_count > 0:
+                        st.success(f"🎉 ¡Procesamiento completado exitosamente!")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.success(f"✅ {len(consolidated_df)} registros procesados")
+                        with col2:
+                            st.success(f"✅ {inserted_count} registros guardados en BD")
+                        st.balloons()
+                    else:
+                        st.error("❌ Error guardando en la base de datos")
+                        st.warning("Los datos fueron procesados correctamente pero no se pudieron guardar")
+                
+                # Opción de descarga con formatos de visualización
+                st.header("💾 Descargar Resultado")
+                
+                # Aplicar formatos de visualización solo para descarga
+                display_df = apply_display_formatting(consolidated_df)
+                
+                csv_buffer = io.StringIO()
+                display_df.to_csv(csv_buffer, index=False)
+                csv_data = csv_buffer.getvalue()
+                
+                st.download_button(
+                    label="📥 Descargar CSV con Todas las Correcciones",
+                    data=csv_data,
+                    file_name=f"consolidated_orders_corrected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    type="secondary"
+                )
+                
+            except Exception as e:
+                st.error(f"❌ Error procesando archivos: {str(e)}")
+                st.exception(e)
+    
+    # Sección de consultas
+    st.markdown("---")
+    st.header("🔍 Consultar Datos Existentes")
+    
+    query_col1, query_col2 = st.columns(2)
+    
+    with query_col1:
+        if st.button("📊 Ver Estadísticas Generales"):
+            try:
+                result = supabase.table('consolidated_orders').select('account_name').execute()
                 
                 if result.data:
                     df = pd.DataFrame(result.data)
-                    st.success(f"✅ Encontrados {len(df)} registros")
-                    
-                    # Aplicar formatos para visualización
-                    display_df = apply_display_formatting(df)
-                    st.dataframe(display_df, use_container_width=True)
-                    
-                    # Descargar
-                    csv = display_df.to_csv(index=False)
-                    st.download_button(
-                        "📥 Descargar CSV",
-                        csv,
-                        f"busqueda_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        "text/csv"
-                    )
+                    if 'account_name' in df.columns:
+                        st.subheader("Registros por Account Name")
+                        account_counts = df['account_name'].value_counts()
+                        st.bar_chart(account_counts)
+                        st.dataframe(account_counts.reset_index())
+                    else:
+                        st.info("Datos encontrados pero sin columna account_name")
                 else:
-                    st.warning("No se encontraron registros")
+                    st.info("No hay datos en la base de datos")
                     
             except Exception as e:
-                st.error(f"Error: {str(e)}")
+                st.error(f"Error consultando estadísticas: {str(e)}")
+    
+    with query_col2:
+        if st.button("📋 Ver Últimos Registros"):
+            try:
+                result = supabase.table('consolidated_orders').select('*').order('id', desc=True).limit(10).execute()
+                
+                if result.data:
+                    recent_df = pd.DataFrame(result.data)
+                    st.subheader("Últimos 10 Registros")
+                    st.dataframe(recent_df, use_container_width=True)
+                else:
+                    st.info("No hay datos en la base de datos")
+                    
+            except Exception as e:
+                st.error(f"Error consultando registros: {str(e)}")
+    
+    # Búsqueda específica
+    st.subheader("🔎 Búsqueda Específica")
+    
+    search_col1, search_col2, search_col3 = st.columns(3)
+    
+    with search_col1:
+        search_order_id = st.text_input("Buscar por Order ID")
+    
+    with search_col2:
+        search_prealert_id = st.text_input("Buscar por Prealert ID")
+    
+    with search_col3:
+        search_account = st.selectbox(
+            "Filtrar por Account",
+            ["Todos", "1-TODOENCARGO-CO", "2-MEGATIENDA SPA", "3-VEENDELO", 
+             "4-MEGA TIENDAS PERUANAS", "5-DETODOPARATODOS", "6-COMPRAFACIL", 
+             "7-COMPRA-YA", "8-FABORCARGO"]
+        )
+    
+    if st.button("🔍 Buscar"):
+        try:
+            query = supabase.table('consolidated_orders').select('*')
+            
+            if search_order_id:
+                query = query.eq('order_id', search_order_id)
+            
+            if search_prealert_id:
+                query = query.eq('prealert_id', search_prealert_id)
+            
+            if search_account != "Todos":
+                query = query.eq('account_name', search_account)
+            
+            result = query.execute()
+            
+            if result.data:
+                search_df = pd.DataFrame(result.data)
+                st.success(f"✅ Encontrados {len(search_df)} registros")
+                st.dataframe(search_df, use_container_width=True)
+            else:
+                st.warning("No se encontraron registros con los criterios especificados")
+                
+        except Exception as e:
+            st.error(f"Error en la búsqueda: {str(e)}")
 
 if __name__ == "__main__":
     main()
