@@ -672,7 +672,24 @@ def insert_to_supabase(df):
                 error_msg = f"Error en lote {i//batch_size + 1}: {str(batch_error)}"
                 st.error(error_msg)
                 errors.append(error_msg)
-                continue
+                
+                # Mostrar más detalles del error
+                if 'logistics_date' in str(batch_error):
+                    st.warning("💡 El error parece estar relacionado con logistics_date")
+                    st.info("Intentando sin logistics_date...")
+                    # Intentar remover logistics_date de este lote
+                    for record in batch:
+                        if 'logistics_date' in record:
+                            del record['logistics_date']
+                    try:
+                        result = supabase.table('consolidated_orders').insert(batch).execute()
+                        total_inserted += len(batch)
+                        st.success(f"✅ Lote {i//batch_size + 1} insertado sin logistics_date")
+                    except Exception as retry_error:
+                        st.error(f"Error incluso sin logistics_date: {str(retry_error)}")
+                        continue
+                else:
+                    continue
         
         progress_bar.progress(1.0)
         status_text.text(f"✅ Completado: {total_inserted} registros insertados")
