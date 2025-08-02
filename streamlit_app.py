@@ -358,9 +358,10 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
             'Address', 'Master Guide', 'Tariff Position', 'External Id', 'Invoice'
         ]
         
-        # Agregar columna de fecha si existe
+        # Agregar columna de fecha si existe (pero no la guardaremos en BD por ahora)
         if logistics_date:
-            consolidated_df['logistics_date'] = np.nan
+            st.info(f"📅 Fecha {logistics_date} seleccionada pero no se guardará en BD por ahora")
+            # consolidated_df['logistics_date'] = np.nan  # Comentado por ahora
         
         for col in logistics_columns:
             if col in logistics_df.columns:
@@ -661,34 +662,53 @@ def insert_to_supabase(df):
             batch = cleaned_records[i:i + batch_size]
             
             try:
-                result = supabase.table('consolidated_orders').insert(batch).execute()
+                # Primero intentar actualizar registros existentes
+                # Usar upsert que inserta nuevos y actualiza existentes
+                result = supabase.table('consolidated_orders').upsert(
+                    batch,
+                    on_conflict='order_id',
+                    returning='minimal'
+                ).execute()
                 total_inserted += len(batch)
                 
                 progress = min(1.0, (i + batch_size) / len(cleaned_records))
                 progress_bar.progress(progress)
-                status_text.text(f"Insertando: {total_inserted}/{len(cleaned_records)} registros")
+                status_text.text(f"Procesando: {total_inserted}/{len(cleaned_records)} registros")
                 
             except Exception as batch_error:
-                error_msg = f"Error en lote {i//batch_size + 1}: {str(batch_error)}"
-                st.error(error_msg)
-                errors.append(error_msg)
-                
-                # Mostrar más detalles del error
-                if 'logistics_date' in str(batch_error):
-                    st.warning("💡 El error parece estar relacionado con logistics_date")
-                    st.info("Intentando sin logistics_date...")
-                    # Intentar remover logistics_date de este lote
-                    for record in batch:
-                        if 'logistics_date' in record:
-                            del record['logistics_date']
-                    try:
-                        result = supabase.table('consolidated_orders').insert(batch).execute()
-                        total_inserted += len(batch)
-                        st.success(f"✅ Lote {i//batch_size + 1} insertado sin logistics_date")
-                    except Exception as retry_error:
-                        st.error(f"Error incluso sin logistics_date: {str(retry_error)}")
-                        continue
-                else:
+                # Si falla el upsert, intentar con insert simple
+                try:
+                    # Filtrar solo registros que no existen
+                    order_ids = [r.get('order_id') for r in batch if r.get('order_id')]
+                    
+                    # Verificar cuáles ya existen
+                    existing = supabase.table('consolidated_orders').select('order_id').in_('order_id', order_ids).execute()
+                    existing_ids = {r['order_id'] for r in existing.data}
+                    
+                    # Separar nuevos y existentes
+                    new_records = [r for r in batch if r.get('order_id') not in existing_ids]
+                    update_records = [r for r in batch if r.get('order_id') in existing_ids]
+                    
+                    # Insertar nuevos
+                    if new_records:
+                        supabase.table('consolidated_orders').insert(new_records).execute()
+                        total_inserted += len(new_records)
+                    
+                    # Actualizar existentes
+                    if update_records:
+                        for record in update_records:
+                            order_id = record.get('order_id')
+                            supabase.table('consolidated_orders').update(record).eq('order_id', order_id).execute()
+                            total_inserted += 1
+                    
+                    progress = min(1.0, (i + batch_size) / len(cleaned_records))
+                    progress_bar.progress(progress)
+                    status_text.text(f"Procesando: {total_inserted}/{len(cleaned_records)} registros")
+                    
+                except Exception as e:
+                    error_msg = f"Error en lote {i//batch_size + 1}: {str(e)}"
+                    st.error(error_msg)
+                    errors.append(error_msg)
                     continue
         
         progress_bar.progress(1.0)
@@ -725,23 +745,19 @@ def main():
         has_existing_data = check_existing_data()
         
         if has_existing_data:
-            st.warning("⚠️ Hay datos existentes en la BD")
-            clear_data = st.checkbox(
-                "🗑️ Limpiar datos existentes antes de procesar",
-                value=False,
-                help="Marcar solo si desea eliminar TODOS los datos existentes"
-            )
+            st.success("✅ Base de datos con registros existentes")
+            st.info("Los nuevos datos se agregarán/actualizarán sin borrar nada")
         else:
-            st.success("✅ Base de datos limpia")
-            clear_data = False
+            st.info("📊 Base de datos vacía")
         
-        st.info("💾 Los datos se guardarán automáticamente en la base de datos")
+        st.info("💾 Los datos se guardarán automáticamente")
         
         st.markdown("---")
         st.markdown("**📋 Sistema Incremental:**")
-        st.markdown("• Puedes subir archivos de forma independiente")
-        st.markdown("• Cada archivo puede procesarse por separado")
-        st.markdown("• Los datos se actualizan sin duplicar")
+        st.markdown("• Los archivos se procesan de forma segura")
+        st.markdown("• Los registros existentes se actualizan")
+        st.markdown("• Los registros nuevos se agregan")
+        st.markdown("• **NUNCA se borran datos**")
         
         st.markdown("---")
         st.markdown("**🎨 Formatos aplicados:**")
@@ -832,13 +848,7 @@ def main():
         
         with st.spinner("Procesando archivos..."):
             try:
-                # Limpiar datos si se seleccionó
-                if clear_data and has_existing_data:
-                    st.info("🗑️ Limpiando datos existentes...")
-                    if clear_existing_data():
-                        st.success("✅ Datos existentes eliminados")
-                    else:
-                        st.warning("⚠️ No se pudieron eliminar completamente los datos existentes")
+                # Ya NO hay opción de limpiar datos - Siempre es seguro
                 
                 # Leer archivos disponibles
                 drapify_df = None
