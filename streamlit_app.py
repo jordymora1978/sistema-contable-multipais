@@ -385,7 +385,7 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
                 match_type = "order_id->Reference"
             
             # Si no encontró, intenta con prealert_id
-            if not logistics_row and prealert_id and prealert_id in logistics_dict_by_order_number:
+            elif prealert_id and prealert_id in logistics_dict_by_order_number:
                 logistics_row = logistics_dict_by_order_number[prealert_id]
                 matched_by_prealert_id += 1
                 match_type = "prealert_id->Order number"
@@ -394,7 +394,12 @@ def process_files_according_to_rules(drapify_df, logistics_df=None, aditionals_d
             if logistics_row is not None:
                 for col in logistics_columns:
                     if col in logistics_df.columns:
-                        consolidated_df.loc[idx, f'logistics_{col.lower().replace(" ", "_")}'] = logistics_row.get(col)
+                        # Convertir Series a dict si es necesario
+                        if isinstance(logistics_row, pd.Series):
+                            value = logistics_row.get(col)
+                        else:
+                            value = logistics_row.get(col)
+                        consolidated_df.loc[idx, f'logistics_{col.lower().replace(" ", "_")}'] = value
                 
                 # Agregar fecha si existe
                 if logistics_date:
